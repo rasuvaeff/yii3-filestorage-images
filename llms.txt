@@ -1,0 +1,155 @@
+# rasuvaeff/yii3-filestorage-images
+
+Named-preset image derivatives (thumbnails, previews, posters) for
+`rasuvaeff/yii3-filestorage`. Namespace: `Rasuvaeff\Yii3FilestorageImages`.
+
+## Install
+
+```bash
+composer require rasuvaeff/yii3-filestorage-images
+```
+
+The application must bind `Yiisoft\Mutex\MutexFactoryInterface` (any
+yiisoft/mutex driver) — the package deliberately does not pick a lock driver.
+The file's store must implement the core
+`Rasuvaeff\Yii3Filestorage\Store\DerivativeAwareStoreInterface`
+(both core filesystem stores and `FlysystemStore` do).
+A processor extension is needed at runtime: ext-gd and/or ext-imagick.
+
+## Rules
+
+- Derivatives are **named presets only** — never free-form dimensions. Preset
+  names match `[a-z0-9][a-z0-9_-]{0,47}`. Unknown preset =
+  `UnknownPresetException` (map to 404).
+- The preset `version` is part of the physical name: `thumb-v2.webp`. Changing
+  any preset option requires bumping `version`, or stale objects keep being
+  served.
+- A derivative is a sibling object, not a metadata row:
+  `<key>/original.jpg` + `<key>/thumb-v1.webp`. Deleting a file deletes the
+  directory, derivatives included.
+- Generation is lazy and runs under a mutex keyed by physical
+  `BlobId + descriptor`, so deduplicated rows sharing bytes generate once.
+- A derivative must be a pure function of original bytes + preset version
+  (blob-scoped sharing under dedup). No per-owner watermarks here.
+- Decode guards: `maxSourceBytes` (default 64 MiB) while reading,
+  `maxSourcePixels` (default 40'000'000) from the image header before decode.
+- SVG is never processed into raster variants; use `SvgSanitizerInterface` at
+  upload time and still serve SVG as attachment unless on a cookie-less origin.
+
+## Configuration (params)
+
+```php
+'rasuvaeff/yii3-filestorage-images' => [
+    'presets' => [
+        'thumb' => [
+            'version' => 1,        // int 1..9999, bump on any change below
+            'width' => 200,        // int 1..16384; at least one of width/height
+            'height' => 200,
+            'fit' => 'cover',      // 'contain' (default) | 'cover' (needs both sides)
+            'format' => 'webp',    // 'jpeg'|'png'|'webp'|'gif'|'avif'
+            'quality' => 82,       // 1..100 (default 82)
+            'upscale' => false,    // default false: never enlarge
+            'maxBytes' => 0,       // cap on encoded output, 0 = none
+        ],
+    ],
+    'defaultUrlTtl' => 'PT1H',     // DateInterval spec for urlFor()
+    'lockTimeout' => 30,           // seconds to wait for the generation lock
+    'maxSourceBytes' => 67_108_864,
+    'maxSourcePixels' => 40_000_000,
+    'svg' => ['maxBytes' => 2_097_152, 'maxElements' => 10_000],
+],
+'yiisoft/yii-console' => ['commands' => ['filestorage:warm' => WarmCommand::class]],
+```
+
+## API
+
+### `Derivatives` (facade; DI-provided)
+
+```php
+public function ensure(File $file, string $presetName): bool;        // true = generated now
+public function stream(File $file, string $presetName): ?StreamInterface; // lazy-generates
+public function urlFor(File $file, string $presetName, ?DateTimeImmutable $expiresAt = null): ?string;
+public function exists(File $file, string $presetName): bool;        // pure probe
+public function descriptor(string $presetName): DerivativeDescriptor; // e.g. thumb-v1.webp
+```
+
+`urlFor()` order: direct public URL (only when the group's `DeliveryPolicy`
+has `allowDirectPublicUrl`) → store-native temporary URL → `null` (serve the
+stream yourself). Requires the store to implement
+`DerivativeUrlProviderInterface` for non-null results.
+
+Throws: `UnknownPresetException`, `UnsupportedSourceException` (skip-grade:
+unprocessable combination or over a guard), `ProcessingFailedException`
+(corrupt bytes), `DerivativeGenerationException` (no capability / missing
+original / lock timeout). All implement the core `FilestorageException`.
+
+### `Preset` / `PresetRegistry`
+
+```php
+new Preset(name: 'thumb', format: Format::Webp, width: 200, height: 200,
+           fit: Fit::Cover, quality: 82, version: 1, upscale: false, maxBytes: 0);
+Preset::fromArray('thumb', $options);      // strict: unknown keys throw InvalidPresetException
+$preset->descriptor(): DerivativeDescriptor;
+
+PresetRegistry::fromArray($params['...']['presets']);
+$registry->get('thumb'): Preset;           // UnknownPresetException with known names
+$registry->has('thumb'): bool;
+$registry->names(): list<string>;
+```
+
+Enums: `Format::{Jpeg,Png,Webp,Gif,Avif}` (`extension()`, `mediaType()`,
+`supportsAlpha()`), `Fit::{Contain,Cover}`.
+
+### Processors (`…\Processing`)
+
+```php
+interface ImageProcessorInterface {
+    public function supports(string $sourceMediaType, Format $output): bool;
+    public function process(StreamInterface $source, string $sourceMediaType, Preset $preset): ProcessedImage;
+}
+```
+
+- `GdImageProcessor`, `ImagickImageProcessor` — construct with
+  `(StreamFactoryInterface $streams, int $maxSourceBytes = 67_108_864, int $maxSourcePixels = 40_000_000)`.
+- `CompositeImageProcessor::fromAvailable($streams, ...)` — Imagick first,
+  then GD, by loaded extensions; this is the DI default for
+  `ImageProcessorInterface`.
+- `ProcessedImage` — `$stream` (seekable, rewound), `$width`, `$height`.
+- `TargetSize::calculate(int $sourceWidth, int $sourceHeight, Preset $preset)` —
+  the shared pure geometry (output canvas + centered crop window).
+- Imagick applies EXIF orientation and strips metadata; GD does neither
+  orientation nor keeps metadata. Animated GIFs become their first frame.
+
+### SVG (`…\Svg`)
+
+```php
+interface SvgSanitizerInterface {
+    /** @throws SvgSanitizationException — never returns a best effort */
+    public function sanitize(string $svg): string;
+}
+new EnshrinedSvgSanitizer(maxBytes: 2_097_152, maxElements: 10_000);
+```
+
+enshrined/svg-sanitize with `removeRemoteReferences(true)` + byte cap before
+parsing + post-pass removing `foreignObject`, `animate`, `animateMotion`,
+`animateTransform`, `set`, `mpath` + element-count cap + root-must-be-`<svg>`.
+
+### Console
+
+```bash
+filestorage:warm [--preset=NAME]... [--after=FILE_ID] [--limit=N]
+```
+
+Pre-generates through `Derivatives::ensure()` (the same locked path as lazy).
+Idempotent, resumable via `--after`, exit 1 only when a generation *failed*
+(unsupported sources are counted as skips). Needs
+`MaintenanceRepositoryInterface`.
+
+## DI (config-plugin)
+
+The package binds: `PresetRegistry`, `ImageProcessorInterface`
+(`CompositeImageProcessor::fromAvailable`), `SvgSanitizerInterface`
+(`EnshrinedSvgSanitizer`), `Derivatives`, `WarmCommand`.
+It does NOT bind: `MutexFactoryInterface` (application picks the driver),
+stores, repositories, `ClockInterface`, delivery policies — those belong to
+the application or other family packages.

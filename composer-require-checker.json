@@ -1,0 +1,38 @@
+{
+    "symbol-whitelist": [
+        "GdImage",
+        "imagetypes",
+        "imagecreatefromstring",
+        "imagecreatetruecolor",
+        "imagealphablending",
+        "imagesavealpha",
+        "imagecolorallocate",
+        "imagecolorallocatealpha",
+        "imagefill",
+        "imagecopyresampled",
+        "imagejpeg",
+        "imagepng",
+        "imagewebp",
+        "imagegif",
+        "imageavif",
+        "IMG_JPG",
+        "IMG_PNG",
+        "IMG_WEBP",
+        "IMG_GIF",
+        "IMG_AVIF",
+        "Imagick",
+        "ImagickException"
+    ],
+    "php-core-extensions": [
+        "Core",
+        "date",
+        "hash",
+        "pcre",
+        "Phar",
+        "random",
+        "Reflection",
+        "SPL",
+        "standard"
+    ],
+    "scan-files": []
+}

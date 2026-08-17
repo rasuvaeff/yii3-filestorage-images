@@ -1,0 +1,20 @@
+<?php
+
+/**
+ * Minimal ext-gd stub: psalm runs where the extension may not be loaded
+ * (the composer:2 image ships without it), and the class plus the IMG_*
+ * capability bits are all it cannot get from its own call map.
+ */
+
+final class GdImage {}
+
+const IMG_GIF = 1;
+const IMG_JPG = 2;
+const IMG_JPEG = 2;
+const IMG_PNG = 4;
+const IMG_WBMP = 8;
+const IMG_XPM = 16;
+const IMG_WEBP = 32;
+const IMG_BMP = 64;
+const IMG_TGA = 128;
+const IMG_AVIF = 256;
