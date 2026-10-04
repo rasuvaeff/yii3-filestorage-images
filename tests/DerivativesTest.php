@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Rasuvaeff\Yii3FilestorageImages\Tests;
 
 use DateInterval;
+use Rasuvaeff\Understudy\Arg;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
 use Rasuvaeff\Yii3Filestorage\Store\StoreRegistry;
 use Rasuvaeff\Yii3Filestorage\Test\InMemoryStore;
@@ -18,30 +19,34 @@ use Rasuvaeff\Yii3FilestorageImages\PresetRegistry;
 use Rasuvaeff\Yii3FilestorageImages\Processing\ImageProcessorInterface;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\DerivativeAwareMemoryStore;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\DerivativeUrlMemoryStore;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Doubles;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Fixtures;
-use Rasuvaeff\Yii3FilestorageImages\Tests\Support\PredictableMutexFactory;
-use Rasuvaeff\Yii3FilestorageImages\Tests\Support\RecordingProcessor;
 use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Expect;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
+use Yiisoft\Mutex\MutexFactoryInterface;
+use Yiisoft\Mutex\MutexInterface;
 use Yiisoft\Test\Support\Clock\StaticClock;
+
+use function Rasuvaeff\Understudy\verify;
 
 #[Test]
 #[Covers(Derivatives::class)]
 final class DerivativesTest
 {
     private DerivativeAwareMemoryStore $store;
-    private RecordingProcessor $processor;
-    private PredictableMutexFactory $mutexes;
+    private ImageProcessorInterface $processor;
+    private MutexFactoryInterface $mutexes;
+    private MutexInterface $mutex;
 
     #[BeforeTest]
     public function setUp(): void
     {
         $this->store = new DerivativeAwareMemoryStore();
-        $this->processor = new RecordingProcessor();
-        $this->mutexes = new PredictableMutexFactory();
+        $this->processor = Doubles::processor();
+        [$this->mutexes, $this->mutex] = Doubles::mutexes();
     }
 
     public function generatesOnceAndReusesAfterwards(): void
@@ -56,7 +61,7 @@ final class DerivativesTest
 
         // The second call is a plain read: no new processing, no new write.
         Assert::false($derivatives->ensure($file, 'thumb'));
-        Assert::same(\count($this->processor->calls), 1);
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), times: 1);
         Assert::same(\count($this->store->derivativeWrites), 1);
         Assert::same($this->store->derivativeBytes($file, $derivatives->descriptor('thumb')), 'processed:thumb-v1');
     }
@@ -69,37 +74,38 @@ final class DerivativesTest
 
         $derivatives->ensure($file, 'thumb');
 
-        Assert::same(\count($this->mutexes->created), 1);
-        Assert::string($this->mutexes->created[0])->contains('filestorage-images:');
-        Assert::same($this->mutexes->released, 1);
+        $names = Arg::captor();
+        verify(fn() => $this->mutexes->create($names->capture()), times: 1);
+        Assert::string($names->last())->contains('filestorage-images:');
+        verify(fn() => $this->mutex->release(), times: 1);
 
         // Under dedup a second logical row shares the physical path — and
         // therefore the rendition and the lock name, keyed by BlobId.
         $twin = Fixtures::file(id: 'file-2', relativePath: $file->relativePath);
         Assert::true($this->store->hasDerivative($twin, $derivatives->descriptor('thumb')));
         $derivatives->ensure($twin, 'thumb');
-        Assert::same(\count($this->processor->calls), 1);
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), times: 1);
     }
 
     public function deniedLockFallsBackToAnObjectSomeoneElseGenerated(): void
     {
         $file = Fixtures::file();
         $this->store->setObject($file->relativePath, 'original bytes');
-        $this->mutexes = new PredictableMutexFactory(acquirable: false);
+        [$this->mutexes, $this->mutex] = Doubles::mutexes(acquirable: false);
         $derivatives = $this->derivatives();
 
         // The winner's output appears between the first probe and the lock.
         $this->store->putDerivative($file, $derivatives->descriptor('thumb'), 'their bytes');
 
         Assert::false($derivatives->ensure($file, 'thumb'));
-        Assert::same($this->processor->calls, []);
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), never: true);
     }
 
     public function deniedLockWithNothingGeneratedIsAnError(): void
     {
         $file = Fixtures::file();
         $this->store->setObject($file->relativePath, 'original bytes');
-        $this->mutexes = new PredictableMutexFactory(acquirable: false);
+        [$this->mutexes, $this->mutex] = Doubles::mutexes(acquirable: false);
 
         Expect::exception(DerivativeGenerationException::class)
             ->withMessageContaining('Could not acquire the generation lock');
@@ -132,7 +138,7 @@ final class DerivativesTest
 
     public function refusesACombinationNoProcessorSupports(): void
     {
-        $this->processor = new RecordingProcessor(supportsEverything: false);
+        $this->processor = Doubles::processor(supports: false);
 
         Expect::exception(UnsupportedSourceException::class)->withMessageContaining('No available processor');
 

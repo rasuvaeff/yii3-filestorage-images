@@ -12,11 +12,11 @@ use Rasuvaeff\Yii3FilestorageImages\Derivatives;
 use Rasuvaeff\Yii3FilestorageImages\Format;
 use Rasuvaeff\Yii3FilestorageImages\Preset;
 use Rasuvaeff\Yii3FilestorageImages\PresetRegistry;
+use Rasuvaeff\Yii3FilestorageImages\Processing\ImageProcessorInterface;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\DerivativeAwareMemoryStore;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Doubles;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Fixtures;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\MemoryMaintenanceRepository;
-use Rasuvaeff\Yii3FilestorageImages\Tests\Support\PredictableMutexFactory;
-use Rasuvaeff\Yii3FilestorageImages\Tests\Support\RecordingProcessor;
 use Symfony\Component\Console\Tester\CommandTester;
 use Testo\Assert;
 use Testo\Codecov\Covers;
@@ -78,7 +78,7 @@ final class WarmCommandTest
         $tester = $this->tester($store, files: [
             Fixtures::file(id: 'file-1'),
             Fixtures::file(id: 'file-2', mimeType: 'application/pdf'),
-        ], processor: new RecordingProcessor(supportsEverything: false));
+        ], processor: Doubles::processor(supports: false));
 
         // Nothing is supported, so everything is a skip — and skips exit 0.
         Assert::same($tester->execute([]), 0);
@@ -157,7 +157,7 @@ final class WarmCommandTest
     private function tester(
         DerivativeAwareMemoryStore $store,
         array $files,
-        ?RecordingProcessor $processor = null,
+        ?ImageProcessorInterface $processor = null,
         ?PresetRegistry $presets = null,
     ): CommandTester {
         $presets ??= new PresetRegistry([
@@ -169,8 +169,8 @@ final class WarmCommandTest
             derivatives: new Derivatives(
                 stores: new StoreRegistry([$store]),
                 presets: $presets,
-                processor: $processor ?? new RecordingProcessor(),
-                mutexes: new PredictableMutexFactory(),
+                processor: $processor ?? Doubles::processor(),
+                mutexes: Doubles::mutexes()[0],
                 deliveryPolicies: new DeliveryPolicyRegistry(),
                 clock: new StaticClock(Fixtures::now()),
             ),

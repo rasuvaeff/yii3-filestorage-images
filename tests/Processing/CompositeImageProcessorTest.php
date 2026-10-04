@@ -5,15 +5,18 @@ declare(strict_types=1);
 namespace Rasuvaeff\Yii3FilestorageImages\Tests\Processing;
 
 use Nyholm\Psr7\Factory\Psr17Factory;
+use Rasuvaeff\Understudy\Arg;
 use Rasuvaeff\Yii3FilestorageImages\Exception\UnsupportedSourceException;
 use Rasuvaeff\Yii3FilestorageImages\Format;
 use Rasuvaeff\Yii3FilestorageImages\Preset;
 use Rasuvaeff\Yii3FilestorageImages\Processing\CompositeImageProcessor;
-use Rasuvaeff\Yii3FilestorageImages\Tests\Support\RecordingProcessor;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Doubles;
 use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Expect;
 use Testo\Test;
+
+use function Rasuvaeff\Understudy\verify;
 
 #[Test]
 #[Covers(CompositeImageProcessor::class)]
@@ -21,8 +24,8 @@ final class CompositeImageProcessorTest
 {
     public function routesToTheFirstSupportingProcessor(): void
     {
-        $refusing = new RecordingProcessor(supportsEverything: false);
-        $accepting = new RecordingProcessor();
+        $refusing = Doubles::processor(supports: false);
+        $accepting = Doubles::processor();
         $composite = new CompositeImageProcessor([$refusing, $accepting]);
         $preset = new Preset(name: 'thumb', format: Format::Webp, width: 10);
 
@@ -30,20 +33,23 @@ final class CompositeImageProcessorTest
 
         $composite->process((new Psr17Factory())->createStream('bytes'), 'image/png', $preset);
 
-        Assert::same($refusing->calls, []);
-        Assert::same($accepting->calls, [['image/png', 'thumb']]);
+        // The composite consults the first processor twice: once for the
+        // explicit supports() probe and once more to route process().
+        verify(fn() => $refusing->supports('image/png', Format::Webp), times: 2);
+        verify(fn() => $refusing->process(Arg::any(), Arg::any(), Arg::any()), never: true);
+        verify(fn() => $accepting->process(Arg::any(), 'image/png', $preset), times: 1);
     }
 
     public function supportsNothingWhenEveryProcessorRefuses(): void
     {
-        $composite = new CompositeImageProcessor([new RecordingProcessor(supportsEverything: false)]);
+        $composite = new CompositeImageProcessor([Doubles::processor(supports: false)]);
 
         Assert::false($composite->supports('image/png', Format::Webp));
     }
 
     public function namesTheImpossiblePairWhenProcessorsExist(): void
     {
-        $composite = new CompositeImageProcessor([new RecordingProcessor(supportsEverything: false)]);
+        $composite = new CompositeImageProcessor([Doubles::processor(supports: false)]);
 
         Expect::exception(UnsupportedSourceException::class)
             ->withMessageContaining('"image/png" into "webp"');
