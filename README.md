@@ -40,11 +40,22 @@ integration is exercised against it.
   rows share one object directory; the generation lock is keyed by
   `BlobId` + versioned derivative name, so concurrent requests — including
   requests for different logical files sharing bytes — generate once.
+- **Dimensions into metadata at upload time** (`ImageMetadataStorage`). An
+  optional decorator over the storage facade: on `add()` it reads the image
+  header (bounded prefix, never a decode — the upload policy's own recipe)
+  and records `width`/`height` into `File::$metadata`, so an image consumer
+  learns the size from the row instead of decoding the object. Wire it where
+  you wire the facade:
+
+  ```php
+  StorageInterface::class => static fn (Storage $storage): StorageInterface
+      => new ImageMetadataStorage($storage),
+  ```
 
 ## Requirements
 
 - PHP 8.3 – 8.5, `ext-dom`, `ext-libxml`
-- `rasuvaeff/yii3-filestorage` ^0.1.1
+- `rasuvaeff/yii3-filestorage` ^0.3
 - A processor extension: `ext-gd` and/or `ext-imagick` (Imagick is preferred
   when both are loaded — it applies EXIF orientation and handles more formats)
 - A `yiisoft/mutex` driver for the generation lock (e.g. `yiisoft/mutex-file`)

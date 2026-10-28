@@ -16,7 +16,13 @@ The file's store must implement the core
 (both core filesystem stores and `FlysystemStore` do).
 A processor extension is needed at runtime: ext-gd and/or ext-imagick.
 
-## Rules
+`ImageMetadataStorage implements StorageInterface` — decorator over the
+facade: `add()` records `width`/`height` into `File::$metadata` from the
+bounded image header (policy's recipe; anything unparseable passes through
+untouched). Wire: `StorageInterface::class => fn (Storage $s) => new
+ImageMetadataStorage($s)`.
+
+## API
 
 - Derivatives are **named presets only** — never free-form dimensions. Preset
   names match `[a-z0-9][a-z0-9_-]{0,47}`. Unknown preset =
