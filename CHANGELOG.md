@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## 0.4.0 — 2026-10-29
 
 - `Srcset::for()`: the preset whitelist as an `srcset` attribute value. #8
+- `examples/watermark-decorator.php`: the "pre-process at upload" watermark
+  recipe — the mark belongs to the original, not to a preset. #8
 - `filestorage:warm` notes presets above version 1 — older renditions stay
   valid and become orphans; `gc --orphans` is the cleaner. #8
 

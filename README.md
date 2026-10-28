@@ -141,6 +141,11 @@ final readonly class AvatarPresenter
 | `exists(File $file, string $preset): bool` | Pure probe, never generates |
 | `descriptor(string $preset): DerivativeDescriptor` | The physical identity (`thumb-v1.webp`) a store addresses the rendition by |
 
+The watermark recipe ships as an example (`examples/watermark-decorator.php`):
+the mark belongs to the *original*, stamped at upload — every derivative
+carries it by construction, and the "rendition = pure function of bytes +
+preset version" invariant stays intact.
+
 `Srcset::for($derivatives, $presets, $file)` turns the whitelist into an
 `srcset` attribute value — `url 200w, url 800w` — from the presets' widths
 (height-only presets have no descriptor and are skipped); it answers null

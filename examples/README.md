@@ -4,6 +4,7 @@
 |---|---|---|
 | `derivatives.php` | Lazy generation end to end: filesystem store, one preset, generated on first `ensure()`, reused on the second, sibling object on disk | No (needs ext-gd or ext-imagick; exits cleanly otherwise) |
 | `svg-sanitize.php` | What the sanitizer strips (scripts, remote refs, `foreignObject`, `animate`) and what it refuses (non-SVG, element-cap breach) | No |
+| `watermark-decorator.php` | The "pre-process at upload" recipe for watermarks: a decorator stamping raster originals on `add()` — every derivative carries the mark by construction, presets stay pure | No (needs ext-gd or ext-imagick; exits cleanly otherwise) |
 | `reencode-decorator.php` | A privacy decorator over the core `Storage`: raster originals are re-encoded on `add()` — EXIF stripped, polyglots defeated — while other uploads pass through byte-identical | No (needs ext-gd or ext-imagick; exits cleanly otherwise) |
 
 Install development dependencies and run from the package checkout:
@@ -12,6 +13,7 @@ Install development dependencies and run from the package checkout:
 composer install
 php examples/derivatives.php
 php examples/svg-sanitize.php
+php examples/watermark-decorator.php
 php examples/reencode-decorator.php
 ```
 
