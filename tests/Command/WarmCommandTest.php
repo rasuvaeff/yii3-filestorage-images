@@ -42,6 +42,29 @@ final class WarmCommandTest
         Assert::same(\count($store->derivativeWrites), 4);
     }
 
+    /**
+     * A preset above version 1 has older physical objects behind it: the run
+     * says so, because they are orphans the operator must clean separately —
+     * warming deliberately does not delete anything.
+     */
+    public function aVersionedPresetIsFlaggedWithItsVersion(): void
+    {
+        $store = $this->storeWith('file-1');
+        $tester = $this->tester($store, files: [Fixtures::file(id: 'file-1')], presets: new PresetRegistry([
+            new Preset(name: 'thumb', version: 2, format: Format::Webp, width: 100),
+        ]));
+
+        Assert::same($tester->execute([]), 0);
+        $display = $this->display($tester);
+        Assert::string($display)->contains('thumb (v2)');
+        Assert::string($display)->contains('filestorage:gc --orphans is the cleaner');
+
+        // Version 1 — the only one — is not flagged: there is nothing older.
+        $fresh = $this->tester($this->storeWith('file-1'), files: [Fixtures::file(id: 'file-1')]);
+        $fresh->execute([]);
+        Assert::false((bool) str_contains($this->display($fresh), 'gc --orphans is the cleaner'));
+    }
+
     public function warmingTwiceGeneratesNothingNew(): void
     {
         $store = $this->storeWith('file-1');

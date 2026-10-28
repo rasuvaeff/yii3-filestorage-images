@@ -135,6 +135,26 @@ final class WarmCommand extends Command
             $failed,
         ));
 
+        // A preset above version 1 has older physical objects behind it by
+        // construction: they stay valid until their last consumer's cache
+        // expires, and then they are orphans for filestorage:gc --orphans to
+        // collect — warming deliberately does not delete them.
+        $versioned = [];
+        foreach ($presetNames as $presetName) {
+            $preset = $this->presets->get($presetName);
+            if ($preset->version > 1) {
+                $versioned[] = $preset->name . ' (v' . $preset->version . ')';
+            }
+        }
+
+        if ($versioned !== []) {
+            $io->text(sprintf(
+                'Presets above version 1: %s. Older renditions remain valid and become orphans — '
+                . 'filestorage:gc --orphans is the cleaner.',
+                implode(', ', $versioned),
+            ));
+        }
+
         return $failed === 0 ? Command::SUCCESS : Command::FAILURE;
     }
 

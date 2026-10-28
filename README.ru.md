@@ -144,6 +144,14 @@ final readonly class AvatarPresenter
 | `exists(File $file, string $preset): bool` | Чистая проверка, никогда не генерирует |
 | `descriptor(string $preset): DerivativeDescriptor` | Физическая идентичность (`thumb-v1.webp`), по которой стор адресует рендицию |
 
+`Srcset::for($derivatives, $presets, $file)` превращает white-лист в
+значение атрибута `srcset` — `url 200w, url 800w` — из ширин пресетов
+(пресеты только с высотой не имеют дескриптора и пропускаются); null, когда
+ни один пресет не дал URL, — пустой `srcset` это вообще не атрибут.
+`filestorage:warm` заканчивает заметкой о каждом пресете старше версии 1:
+старые рендеры остаются валидными и становятся orphan'ами — чистильщик это
+`filestorage:gc --orphans`.
+
 Фасад реализует контракт ядра `DerivativeResolverInterface` — именно его
 потребляет download-экшен из `yii3-filestorage-web` для отдачи variant-токенов,
 так что установка обоих пакетов и есть вся проводка: `urlFor()` начинает

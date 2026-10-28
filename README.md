@@ -141,6 +141,14 @@ final readonly class AvatarPresenter
 | `exists(File $file, string $preset): bool` | Pure probe, never generates |
 | `descriptor(string $preset): DerivativeDescriptor` | The physical identity (`thumb-v1.webp`) a store addresses the rendition by |
 
+`Srcset::for($derivatives, $presets, $file)` turns the whitelist into an
+`srcset` attribute value — `url 200w, url 800w` — from the presets' widths
+(height-only presets have no descriptor and are skipped); it answers null
+when nothing yields a URL, because an `srcset` with nothing in it is no
+attribute at all. `filestorage:warm` now ends with a note for every preset
+above version 1: older renditions remain valid and become orphans —
+`filestorage:gc --orphans` is the cleaner.
+
 The facade implements core's `DerivativeResolverInterface` — that contract is
 what `yii3-filestorage-web`'s download action consumes to serve variant
 tokens, so installing both packages is the whole wiring: `urlFor()` starts
