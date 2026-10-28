@@ -75,9 +75,6 @@ final class ImagickImageProcessorTest
         Assert::same([$processed->width, $processed->height], [10, 5]);
     }
 
-    /**
-     * @param list<\Rasuvaeff\PropertyTesting\ArbitraryInterface> $generators
-     */
     #[DataProvider('orientationSwapsDimensionsProvider')]
     public function exifOrientationIsAppliedBeforeTheGeometry(int $orientation): void
     {
