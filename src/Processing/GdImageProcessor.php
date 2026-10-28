@@ -152,9 +152,12 @@ final readonly class GdImageProcessor implements ImageProcessorInterface
 
         $written = match ($preset->format) {
             Format::Jpeg => imagejpeg($canvas, $resource, quality: $preset->quality),
-            // PNG is lossless; quality maps onto zlib effort, inverted —
-            // 100 is "spend nothing", 9 is "compress hardest".
-            Format::Png => imagepng($canvas, $resource, quality: intdiv((100 - $preset->quality) * 9, 100)),
+            // PNG is lossless; quality maps onto zlib effort: a higher
+            // quality is more effort and therefore a *smaller* file — the
+            // same direction as the lossy formats and as Imagick's
+            // setImageCompressionQuality(), so one preset behaves alike
+            // across processors.
+            Format::Png => imagepng($canvas, $resource, quality: intdiv($preset->quality * 9, 100)),
             Format::Webp => imagewebp($canvas, $resource, quality: $preset->quality),
             Format::Gif => imagegif($canvas, $resource),
             Format::Avif => imageavif($canvas, $resource, quality: $preset->quality),

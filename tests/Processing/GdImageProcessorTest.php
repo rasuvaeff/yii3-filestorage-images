@@ -254,6 +254,48 @@ final class GdImageProcessorTest
     }
 
 
+    /**
+     * PNG `quality` maps onto zlib effort in the same direction as the
+     * lossy formats: a higher quality is a smaller file, never a larger
+     * one. A stored level-0 PNG of noise is nearly raw bytes; level 8 is
+     * visibly smaller.
+     */
+    public function pngQualityMapsOntoCompressionEffort(): void
+    {
+        $this->requireExtension();
+
+        $noise = imagecreatetruecolor(64, 64);
+        \mt_srand(1);
+        for ($y = 0; $y < 64; $y++) {
+            for ($x = 0; $x < 64; $x++) {
+                imagesetpixel(
+                    $noise,
+                    $x,
+                    $y,
+                    (int) imagecolorallocate($noise, \mt_rand(0, 255), \mt_rand(0, 255), \mt_rand(0, 255)),
+                );
+            }
+        }
+
+        ob_start();
+        imagepng($noise);
+        $bytes = (string) ob_get_clean();
+
+        $processor = new GdImageProcessor(new Psr17Factory());
+        $sparse = $processor->process(
+            (new Psr17Factory())->createStream($bytes),
+            'image/png',
+            new Preset(name: 'sparse', format: Format::Png, width: 64, quality: 10),
+        );
+        $thorough = $processor->process(
+            (new Psr17Factory())->createStream($bytes),
+            'image/png',
+            new Preset(name: 'thorough', format: Format::Png, width: 64, quality: 90),
+        );
+
+        Assert::true(\strlen((string) $thorough->stream) < \strlen((string) $sparse->stream));
+    }
+
     private function requireExtension(): void
     {
         if (!\extension_loaded('gd')) {

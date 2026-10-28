@@ -38,13 +38,13 @@ test-images:
 	$(DOCKER) sh -lc '$(IMAGES_BOOTSTRAP) && composer test'
 
 test-coverage:
-	$(DOCKER) sh -lc '$(PCOV_BOOTSTRAP) && composer test:coverage'
+	$(DOCKER) sh -lc '$(IMAGES_BOOTSTRAP) && $(PCOV_BOOTSTRAP) && composer test:coverage'
 
 test-coverage-ci:
-	$(DOCKER) sh -lc '$(PCOV_BOOTSTRAP) && composer test:coverage:ci'
+	$(DOCKER) sh -lc '$(IMAGES_BOOTSTRAP) && $(PCOV_BOOTSTRAP) && composer test:coverage:ci'
 
 mutation:
-	$(DOCKER) sh -lc '$(PCOV_BOOTSTRAP) && composer mutation'
+	$(DOCKER) sh -lc '$(IMAGES_BOOTSTRAP) && $(PCOV_BOOTSTRAP) && composer mutation'
 
 rector:
 	$(DOCKER) composer rector

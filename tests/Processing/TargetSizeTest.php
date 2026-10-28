@@ -148,6 +148,31 @@ final class TargetSizeTest
         Assert::same([$target->width, $target->height], [1, 5]);
     }
 
+    /**
+     * MAX_DIMENSION is a memory grant the computed sides must respect too:
+     * a one-sided upscale preset would otherwise hand the processors a
+     * 16384×40960 canvas, and a wider-than-cap source passes its width
+     * through at scale 1. The whole box shrinks to fit, aspect intact.
+     */
+    public function containClampsComputedSidesToTheDimensionCap(): void
+    {
+        $upscaled = TargetSize::calculate(
+            sourceWidth: 4_000,
+            sourceHeight: 10_000,
+            preset: new Preset(name: 'wide', format: Format::Webp, width: 16_384, upscale: true),
+        );
+
+        Assert::same([$upscaled->width, $upscaled->height], [6_554, 16_384]);
+
+        $passthrough = TargetSize::calculate(
+            sourceWidth: 20_000,
+            sourceHeight: 1_000,
+            preset: new Preset(name: 'tall', format: Format::Webp, height: 1_600),
+        );
+
+        Assert::same([$passthrough->width, $passthrough->height], [16_384, 819]);
+    }
+
     public function coverRoundsWindowDimensionsHalfAwayFromZero(): void
     {
         // 3 * 1 / 2 = 1.5: round() gives 2, floor() would give 1.

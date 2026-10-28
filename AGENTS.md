@@ -52,10 +52,11 @@ make release-check
 ```
 
 `make test-coverage` and `make mutation` bootstrap `pcov` inside the
-`composer:2` container because the base image has no coverage driver.
-`make test-images` additionally compiles **gd + imagick** into the container:
-the processor tests throw `SkipTest` without them, so plain `make test` is
-green but incomplete. Run `make test-images` whenever a processor changes.
+`composer:2` container because the base image has no coverage driver;
+both additionally compile **gd + imagick** (like `make test-images`),
+because the processor tests throw `SkipTest` without them — a coverage
+or mutation run that skips them measures a different package than CI
+does. Run `make test-images` whenever a processor changes.
 
 ## Invariants & gotchas
 

@@ -64,9 +64,23 @@ final readonly class TargetSize
             $scale = min($scale, 1.0);
         }
 
+        // MAX_DIMENSION is a memory grant, and the preset's own sides
+        // already respect it — but contain can compute the *other* side
+        // above it (a one-sided upscale preset, or a source wider than the
+        // cap passing through at scale 1). No canvas the processors are
+        // handed may exceed the grant, so the whole box shrinks to fit.
+        $width = (float) $sourceWidth * $scale;
+        $height = (float) $sourceHeight * $scale;
+        $largest = max($width, $height);
+        if ($largest > Preset::MAX_DIMENSION) {
+            $shrink = (float) Preset::MAX_DIMENSION / $largest;
+            $width *= $shrink;
+            $height *= $shrink;
+        }
+
         return new self(
-            width: self::dimension((float) $sourceWidth * $scale),
-            height: self::dimension((float) $sourceHeight * $scale),
+            width: self::dimension($width),
+            height: self::dimension($height),
             sourceX: 0,
             sourceY: 0,
             sourceWidth: $sourceWidth,
