@@ -63,19 +63,19 @@ final class PresetTest
         ];
         yield 'version zero' => [
             static fn(): Preset => new Preset(name: 'thumb', format: Format::Webp, width: 1, version: 0),
-            'version must be between',
+            'version must be between 1 and 9999',
         ];
         yield 'version over cap' => [
             static fn(): Preset => new Preset(name: 'thumb', format: Format::Webp, width: 1, version: 10_000),
-            'version must be between',
+            'version must be between 1 and 9999',
         ];
         yield 'zero width' => [
             static fn(): Preset => new Preset(name: 'thumb', format: Format::Webp, width: 0),
-            'width must be between',
+            'width must be between 1 and 16384',
         ];
         yield 'height over cap' => [
             static fn(): Preset => new Preset(name: 'thumb', format: Format::Webp, height: 16_385),
-            'height must be between',
+            'height must be between 1 and 16384',
         ];
         yield 'no dimensions at all' => [
             static fn(): Preset => new Preset(name: 'thumb', format: Format::Webp),
@@ -87,16 +87,54 @@ final class PresetTest
         ];
         yield 'quality zero' => [
             static fn(): Preset => new Preset(name: 'thumb', format: Format::Webp, width: 1, quality: 0),
-            'quality must be between',
+            'quality must be between 1 and 100',
         ];
         yield 'quality over 100' => [
             static fn(): Preset => new Preset(name: 'thumb', format: Format::Webp, width: 1, quality: 101),
-            'quality must be between',
+            'quality must be between 1 and 100',
         ];
         yield 'negative maxBytes' => [
             static fn(): Preset => new Preset(name: 'thumb', format: Format::Webp, width: 1, maxBytes: -1),
             'maxBytes must not be negative',
         ];
+    }
+
+    /**
+     * Every range check is inclusive at both ends: version 9999, dimensions
+     * at the 16384 cap and quality at 1 and 100 are all valid presets. A
+     * strict comparison here would silently reject the boundary the message
+     * promises.
+     */
+    public function boundariesAreValidOnBothEnds(): void
+    {
+        $maxed = new Preset(
+            name: 'max',
+            format: Format::Webp,
+            width: Preset::MAX_DIMENSION,
+            height: Preset::MAX_DIMENSION,
+            quality: 100,
+            version: 9999,
+        );
+        $minimal = new Preset(name: 'min', format: Format::Webp, width: 1, height: 1, quality: 1);
+
+        Assert::same($maxed->version, 9999);
+        Assert::same([$maxed->width, $maxed->height], [16_384, 16_384]);
+        Assert::same($maxed->quality, 100);
+        Assert::same([$minimal->width, $minimal->height], [1, 1]);
+        Assert::same($minimal->quality, 1);
+    }
+
+    /**
+     * A width-only preset leaves height null (and vice versa) — the state the
+     * constructor's narrowing assertions have to tolerate.
+     */
+    public function oneSidedPresetLeavesTheOtherSideNull(): void
+    {
+        $widthOnly = new Preset(name: 'wide', format: Format::Webp, width: 100);
+        $heightOnly = new Preset(name: 'tall', format: Format::Webp, height: 100);
+
+        Assert::null($widthOnly->height);
+        Assert::null($heightOnly->width);
     }
 
     public function fromArrayBuildsTheFullShape(): void
@@ -147,19 +185,19 @@ final class PresetTest
     {
         yield 'unknown key names itself' => [
             ['widht' => 200, 'format' => 'webp'],
-            'unknown option "widht"',
+            'unknown option "widht" — known options are "version", "width", "height", "fit", "format", "quality", "upscale", "maxBytes"',
         ];
         yield 'missing format' => [
             ['width' => 200],
-            'format must be one of',
+            'format must be one of "jpeg", "png", "webp", "gif", "avif"',
         ];
         yield 'format not in the enum' => [
             ['width' => 200, 'format' => 'bmp'],
-            'format must be one of',
+            'format must be one of "jpeg", "png", "webp", "gif", "avif"',
         ];
         yield 'fit not in the enum' => [
             ['width' => 200, 'format' => 'webp', 'fit' => 'stretch'],
-            'fit must be one of',
+            'fit must be one of "contain", "cover"',
         ];
         yield 'width as string' => [
             ['width' => '200', 'format' => 'webp'],

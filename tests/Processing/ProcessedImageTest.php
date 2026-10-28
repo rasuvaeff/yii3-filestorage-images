@@ -25,6 +25,19 @@ final class ProcessedImageTest
         Assert::same([$image->width, $image->height], [10, 5]);
     }
 
+    /**
+     * One pixel is a dimension, not a degenerate case: contain into a
+     * near-zero scale produces 1×N outputs, so the floor at one has to accept
+     * exactly the boundary it enforces.
+     */
+    public function acceptsSinglePixelDimensions(): void
+    {
+        $stream = (new Psr17Factory())->createStream('bytes');
+
+        Assert::same((new ProcessedImage($stream, width: 1, height: 5))->width, 1);
+        Assert::same((new ProcessedImage($stream, width: 5, height: 1))->height, 1);
+    }
+
     public function rejectsNonPositiveDimensions(): void
     {
         Expect::exception(InvalidArgumentException::class)->withMessageContaining('must be positive');

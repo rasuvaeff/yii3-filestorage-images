@@ -34,7 +34,7 @@ final class PresetRegistryTest
         $registry = new PresetRegistry([new Preset(name: 'thumb', format: Format::Webp, width: 200)]);
 
         Expect::exception(UnknownPresetException::class)
-            ->withMessageContaining('configured presets are "thumb"');
+            ->withMessageContaining('Unknown preset "poster" — configured presets are "thumb"');
 
         $registry->get('poster');
     }

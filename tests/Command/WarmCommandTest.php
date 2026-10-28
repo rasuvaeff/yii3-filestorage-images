@@ -36,7 +36,9 @@ final class WarmCommandTest
         ]);
 
         Assert::same($tester->execute([]), 0);
-        Assert::string($this->display($tester))->contains('Files: 2. Renditions: 4 generated, 0 already present');
+        Assert::string($this->display($tester))->contains(
+            '[OK] Files: 2. Renditions: 4 generated, 0 already present, 0 skipped, 0 failed.',
+        );
         Assert::same(\count($store->derivativeWrites), 4);
     }
 
@@ -95,8 +97,20 @@ final class WarmCommandTest
         ]);
 
         Assert::same($tester->execute([]), 1);
-        Assert::string($this->display($tester))->contains('2 generated, 0 already present, 0 skipped, 2 failed');
+        Assert::string($this->display($tester))->contains(
+            '[WARNING] Files: 2. Renditions: 2 generated, 0 already present, 0 skipped, 2 failed.',
+        );
         Assert::string($this->display($tester))->contains('failed: file-2');
+    }
+
+    public function repeatingThePresetOptionAsksForEveryNamedPreset(): void
+    {
+        $store = $this->storeWith('file-1');
+        $tester = $this->tester($store, files: [Fixtures::file(id: 'file-1')]);
+
+        Assert::same($tester->execute(['--preset' => ['thumb', 'poster']]), 0);
+        Assert::string($this->display($tester))->contains('2 generated');
+        Assert::same(\count($store->derivativeWrites), 2);
     }
 
     public function limitAndAfterPageThroughTheRepository(): void
@@ -117,6 +131,39 @@ final class WarmCommandTest
         Assert::same($second->execute(['--after' => 'file-2', '--preset' => ['thumb']]), 0);
         Assert::string($this->display($second))->contains('Files: 1.');
         Assert::string($this->display($second))->contains('Last id: file-3');
+    }
+
+    /**
+     * A limit below one clamps to one file, and a page is never asked for
+     * zero or two files when the limit says one.
+     */
+    public function aLimitBelowOneClampsToOneFile(): void
+    {
+        $store = $this->storeWith('file-1', 'file-2');
+
+        $zero = $this->tester($store, files: [Fixtures::file(id: 'file-1'), Fixtures::file(id: 'file-2')]);
+        Assert::same($zero->execute(['--limit' => '0', '--preset' => ['thumb']]), 0);
+        Assert::string($this->display($zero))->contains('Files: 1.');
+        Assert::string($this->display($zero))->contains('Last id: file-1');
+
+        $one = $this->tester($store, files: [Fixtures::file(id: 'file-1'), Fixtures::file(id: 'file-2')]);
+        Assert::same($one->execute(['--limit' => '1', '--preset' => ['thumb']]), 0);
+        Assert::string($this->display($one))->contains('Files: 1.');
+        Assert::string($this->display($one))->contains('Last id: file-1');
+    }
+
+    /**
+     * When the repository runs out before the limit does, the empty page is
+     * what stops the walk — not the file counter.
+     */
+    public function anExhaustedRepositoryEndsTheWalk(): void
+    {
+        $store = $this->storeWith('file-1');
+        $tester = $this->tester($store, files: [Fixtures::file(id: 'file-1')]);
+
+        Assert::same($tester->execute(['--limit' => '10', '--preset' => ['thumb']]), 0);
+        Assert::string($this->display($tester))->contains('Files: 1.');
+        Assert::string($this->display($tester))->contains('Last id: file-1');
     }
 
     public function noConfiguredPresetsIsAWarningNotAnError(): void

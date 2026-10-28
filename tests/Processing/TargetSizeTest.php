@@ -95,6 +95,74 @@ final class TargetSizeTest
     }
 
     /**
+     * The crop window's height comes from the box ratio applied to the source
+     * width — when the source is taller than the box aspect, that formula and
+     * not the source height has to be the answer.
+     */
+    public function coverTakesTheWindowHeightFromTheBoxRatio(): void
+    {
+        $target = TargetSize::calculate(
+            sourceWidth: 100,
+            sourceHeight: 300,
+            preset: new Preset(name: 'sq', format: Format::Webp, width: 100, height: 100, fit: Fit::Cover),
+        );
+
+        Assert::same([$target->sourceWidth, $target->sourceHeight], [100, 100]);
+        Assert::same([$target->sourceX, $target->sourceY], [0, 100]);
+    }
+
+    /**
+     * An odd source-minus-window difference centers with floor division: the
+     * leftover pixel goes to the far side, on both axes independently.
+     */
+    public function coverCentersOddDifferencesWithFloorDivision(): void
+    {
+        $wide = TargetSize::calculate(
+            sourceWidth: 405,
+            sourceHeight: 200,
+            preset: new Preset(name: 'sq', format: Format::Webp, width: 100, height: 100, fit: Fit::Cover),
+        );
+        $tall = TargetSize::calculate(
+            sourceWidth: 200,
+            sourceHeight: 405,
+            preset: new Preset(name: 'sq', format: Format::Webp, width: 100, height: 100, fit: Fit::Cover),
+        );
+
+        // Window is 200x200 for both; 405 - 200 = 205, floor(205 / 2) = 102.
+        Assert::same($wide->sourceX, 102);
+        Assert::same($tall->sourceY, 102);
+    }
+
+    /**
+     * Rounding is half away from zero, and never down to nothing: a 1×10000
+     * source contain-ed into a 5px-tall box is still a 1px-wide image.
+     */
+    public function containNeverCollapsesASideToZero(): void
+    {
+        $target = TargetSize::calculate(
+            sourceWidth: 1,
+            sourceHeight: 10_000,
+            preset: new Preset(name: 'strip', format: Format::Webp, height: 5),
+        );
+
+        Assert::same([$target->width, $target->height], [1, 5]);
+    }
+
+    public function coverRoundsWindowDimensionsHalfAwayFromZero(): void
+    {
+        // 3 * 1 / 2 = 1.5: round() gives 2, floor() would give 1.
+        $target = TargetSize::calculate(
+            sourceWidth: 3,
+            sourceHeight: 3,
+            preset: new Preset(name: 'half', format: Format::Webp, width: 1, height: 2, fit: Fit::Cover),
+        );
+
+        Assert::same([$target->sourceWidth, $target->sourceHeight], [2, 3]);
+        Assert::same([$target->width, $target->height], [1, 2]);
+        Assert::same([$target->sourceX, $target->sourceY], [0, 0]);
+    }
+
+    /**
      * @param int<1, 4000> $sourceWidth
      * @param int<1, 4000> $sourceHeight
      * @param int<1, 500> $boxWidth

@@ -94,13 +94,60 @@ final class EnshrinedSvgSanitizerTest
 
     public function rejectsADocumentOverTheByteCap(): void
     {
-        $sanitizer = new EnshrinedSvgSanitizer(maxBytes: 64);
+        $sanitizer = new EnshrinedSvgSanitizer(maxBytes: 100);
 
-        Expect::exception(SvgSanitizationException::class)->withMessageContaining('64-byte limit');
+        Expect::exception(SvgSanitizationException::class)->withMessageContaining(
+            'SVG document is 101 bytes, over the 100-byte limit',
+        );
 
         $sanitizer->sanitize(
-            '<svg xmlns="http://www.w3.org/2000/svg">' . str_repeat('<rect width="1" height="1"/>', 10) . '</svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect/>' . str_repeat(' ', 48) . '</svg>',
         );
+    }
+
+    /**
+     * Both caps are inclusive at the boundary: a document of exactly the
+     * allowed bytes with exactly the allowed elements sanitizes cleanly.
+     */
+    public function acceptsADocumentExactlyAtBothCaps(): void
+    {
+        $atBytes = new EnshrinedSvgSanitizer(maxBytes: 100);
+        $clean = $atBytes->sanitize(
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect/>' . str_repeat(' ', 47) . '</svg>',
+        );
+
+        Assert::string($clean)->contains('<rect');
+
+        // The element cap counts every element the DOM reports — the root
+        // included: svg + rect + circle is exactly three.
+        $atElements = new EnshrinedSvgSanitizer(maxElements: 3);
+        $clean = $atElements->sanitize(
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/><circle r="1"/></svg>',
+        );
+
+        Assert::string($clean)->contains('<circle');
+    }
+
+    /**
+     * The libxml error handler the post-pass installs is a resource held
+     * across one load, not a process-wide setting: internal errors are off
+     * again and no error leaks into the global list afterwards.
+     */
+    public function leavesLibxmlErrorStateRestored(): void
+    {
+        $previous = libxml_use_internal_errors(use_errors: false);
+
+        try {
+            $this->sanitizer->sanitize(
+                '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>',
+            );
+
+            Assert::false(libxml_use_internal_errors());
+            Assert::same(libxml_get_errors(), []);
+        } finally {
+            libxml_use_internal_errors($previous);
+            libxml_clear_errors();
+        }
     }
 
     public function rejectsADocumentOverTheElementCap(): void
@@ -119,6 +166,28 @@ final class EnshrinedSvgSanitizerTest
         Expect::exception(SvgSanitizationException::class);
 
         $this->sanitizer->sanitize('just some text, no markup at all');
+    }
+
+    /**
+     * When the library itself throws, the wrapper names it as the cause —
+     * the operator has to see whether the input was hopeless or the
+     * sanitizer misconfigured.
+     */
+    public function aLibraryFailureIsReportedWithItsCause(): void
+    {
+        // A document with no svg root is the input shape that makes the
+        // library throw rather than return false — the wrapper's catch arm.
+        $noSvgRoot = str_repeat('<g>', 60) . '<rect width="1" height="1"/>' . str_repeat('</g>', 60);
+
+        try {
+            $this->sanitizer->sanitize($noSvgRoot);
+        } catch (SvgSanitizationException $exception) {
+            Assert::true($exception->getPrevious() instanceof \Exception);
+
+            return;
+        }
+
+        throw new \RuntimeException('expected an SvgSanitizationException');
     }
 
     public function rejectsXmlWhoseRootIsNotSvg(): void

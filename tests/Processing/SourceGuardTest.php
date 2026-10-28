@@ -33,6 +33,33 @@ final class SourceGuardTest
         Assert::same(SourceGuard::readBounded($this->streams->createStream('abc'), maxBytes: 0), 'abc');
     }
 
+    /**
+     * A source larger than one read chunk is the normal case for real
+     * photos: every non-empty read with EOF still ahead has to be appended,
+     * not treated as a stall.
+     */
+    public function readsStreamsLargerThanOneChunk(): void
+    {
+        $first = str_repeat('a', 262_144);
+        $second = str_repeat('b', 16);
+
+        $bytes = SourceGuard::readBounded($this->streams->createStream($first . $second), maxBytes: 0);
+
+        Assert::same(\strlen($bytes), 262_160);
+        Assert::same($bytes[0], 'a');
+        Assert::same($bytes[262_144], 'b');
+    }
+
+    /**
+     * Single-pixel sides are dimensions, not failures — contain into a tiny
+     * box legitimately produces 1×N and N×1 geometry.
+     */
+    public function acceptsSinglePixelSides(): void
+    {
+        Assert::same(SourceGuard::dimensions(Png::header(width: 1, height: 5), maxPixels: 0), [1, 5]);
+        Assert::same(SourceGuard::dimensions(Png::header(width: 5, height: 1), maxPixels: 0), [5, 1]);
+    }
+
     public function acceptsExactlyTheCap(): void
     {
         Assert::same(SourceGuard::readBounded($this->streams->createStream('12345678'), maxBytes: 8), '12345678');
@@ -77,7 +104,7 @@ final class SourceGuardTest
     public function rejectsAHeaderDeclaringMorePixelsThanTheCap(): void
     {
         Expect::exception(UnsupportedSourceException::class)
-            ->withMessageContaining('over the 10000-pixel processing cap');
+            ->withMessageContaining('Source is 101x100 = 10100 pixels, over the 10000-pixel processing cap');
 
         SourceGuard::dimensions(Png::header(width: 101, height: 100), maxPixels: 10_000);
     }

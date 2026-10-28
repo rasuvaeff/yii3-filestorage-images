@@ -85,4 +85,29 @@ final class CompositeImageProcessorTest
             \extension_loaded('imagick') || \extension_loaded('gd'),
         );
     }
+
+    /**
+     * `fromAvailable()` lists exactly the processors whose extension is
+     * loaded, Imagick first. The composition is the routing table: anything
+     * else in that array would answer `supports()` and `process()` calls no
+     * installed extension can back.
+     */
+    public function fromAvailableListsExactlyTheLoadedProcessors(): void
+    {
+        $expected = [];
+        if (\extension_loaded('imagick')) {
+            $expected[] = \Rasuvaeff\Yii3FilestorageImages\Processing\ImagickImageProcessor::class;
+        }
+        if (\extension_loaded('gd')) {
+            $expected[] = \Rasuvaeff\Yii3FilestorageImages\Processing\GdImageProcessor::class;
+        }
+
+        $composite = CompositeImageProcessor::fromAvailable(new Psr17Factory());
+        $processors = (new \ReflectionProperty(CompositeImageProcessor::class, 'processors'))->getValue($composite);
+
+        Assert::same(
+            \array_map(\get_class(...), \is_array($processors) ? $processors : []),
+            $expected,
+        );
+    }
 }

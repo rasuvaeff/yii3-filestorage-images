@@ -76,7 +76,17 @@ final class DerivativesTest
 
         $names = Arg::captor();
         verify(fn() => $this->mutexes->create($names->capture()), times: 1);
-        Assert::string($names->last())->contains('filestorage-images:');
+        // The exact physical identity: prefix + sha256(blob key + '/' + the
+        // versioned derivative filename), so deduplicated rows share a lock
+        // and two presets never collide on one key.
+        Assert::same(
+            $names->last(),
+            'filestorage-images:' . \hash(
+                'sha256',
+                \Rasuvaeff\Yii3Filestorage\Store\BlobId::create($file->storeName, $file->relativePath)->key()
+                    . '/thumb-v1.webp',
+            ),
+        );
         verify(fn() => $this->mutex->release(), times: 1);
 
         // Under dedup a second logical row shares the physical path — and
@@ -108,7 +118,7 @@ final class DerivativesTest
         [$this->mutexes, $this->mutex] = Doubles::mutexes(acquirable: false);
 
         Expect::exception(DerivativeGenerationException::class)
-            ->withMessageContaining('Could not acquire the generation lock');
+            ->withMessageContaining('Could not acquire the generation lock for "thumb-v1.webp" of file "file-1" within 30s');
 
         $this->derivatives()->ensure($file, 'thumb');
     }
@@ -124,7 +134,10 @@ final class DerivativesTest
     {
         $stores = new StoreRegistry([new InMemoryStore('memory', Fixtures::factory(), new StaticClock(Fixtures::now()))]);
 
-        Expect::exception(DerivativeGenerationException::class)->withMessageContaining('cannot hold derivatives');
+        Expect::exception(DerivativeGenerationException::class)->withMessageContaining(
+            'Store "memory" cannot hold derivatives — it does not implement '
+                . \Rasuvaeff\Yii3Filestorage\Store\DerivativeAwareStoreInterface::class,
+        );
 
         $this->derivatives(stores: $stores)->ensure(Fixtures::file(), 'thumb');
     }
@@ -147,9 +160,28 @@ final class DerivativesTest
 
     public function refusesASourceOverTheByteCap(): void
     {
-        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('processing cap');
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining(
+            'File "file-1" is 513 bytes, over the 512-byte processing cap',
+        );
 
         $this->derivatives(maxSourceBytes: 512)->ensure(Fixtures::file(size: 513), 'thumb');
+    }
+
+    /**
+     * The cap is inclusive at the boundary and disabled at zero — a file of
+     * exactly the capped size processes, and a zero cap is not a zero budget.
+     */
+    public function acceptsASourceExactlyAtTheByteCapAndWithNoCapAtAll(): void
+    {
+        $file = Fixtures::file(size: 512);
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        Assert::true($this->derivatives(maxSourceBytes: 512)->ensure($file, 'thumb'));
+
+        $huge = Fixtures::file(id: 'huge-file', size: 5_000_000_000);
+        $this->store->setObject($huge->relativePath, 'original bytes');
+
+        Assert::true($this->derivatives(maxSourceBytes: 0)->ensure($huge, 'thumb'));
     }
 
     public function missingOriginalBytesAreAnError(): void
@@ -222,6 +254,18 @@ final class DerivativesTest
         Assert::string((string) $url)->contains(
             'expires=' . Fixtures::now()->add(new DateInterval('PT1H'))->getTimestamp(),
         );
+    }
+
+    public function urlForHonorsAnExplicitExpiryOverTheDefaultTtl(): void
+    {
+        $urlStore = new DerivativeUrlMemoryStore($this->store);
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        $expiresAt = Fixtures::now()->add(new DateInterval('PT2H'));
+        $url = $this->derivatives(stores: new StoreRegistry([$urlStore]))->urlFor($file, 'thumb', $expiresAt);
+
+        Assert::string((string) $url)->contains('expires=' . $expiresAt->getTimestamp());
     }
 
     public function descriptorExposesThePhysicalIdentity(): void
