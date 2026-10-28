@@ -128,9 +128,17 @@ final readonly class AvatarPresenter
 |---|---|
 | `ensure(File $file, string $preset): bool` | Гарантирует существование рендиции; генерирует под локом. `true`, когда сгенерировал именно этот вызов |
 | `stream(File $file, string $preset): ?StreamInterface` | Байты рендиции, с ленивой генерацией при необходимости |
-| `urlFor(File $file, string $preset, ?DateTimeImmutable $expiresAt = null): ?string` | URL с учётом политики: прямой публичный → store-native временный → `null` |
+| `urlFor(File $file, string $preset, ?DateTimeImmutable $expiresAt = null): ?string` | URL с учётом политики: прямой публичный → store-native временный → подписанный прокси (`-web`) → `null` |
 | `exists(File $file, string $preset): bool` | Чистая проверка, никогда не генерирует |
 | `descriptor(string $preset): DerivativeDescriptor` | Физическая идентичность (`thumb-v1.webp`), по которой стор адресует рендицию |
+
+Фасад реализует контракт ядра `DerivativeResolverInterface` — именно его
+потребляет download-экшен из `yii3-filestorage-web` для отдачи variant-токенов,
+так что установка обоих пакетов и есть вся проводка: `urlFor()` начинает
+отдавать подписанные прокси-URL для приватного filesystem-стора, и эти URL
+разрешаются (`yii3-filestorage-web` 0.3.0+ — более ранние релизы требуют
+старое ядро и variant-токены не отдают). `UnknownPresetException` наследует core-овский
+`UnresolvableVariantException` — сигнал «ответь 404».
 
 Словарь ошибок: `UnknownPresetException` (нет в whitelist — мапьте в 404),
 `UnsupportedSourceException` (инсталляция не обрабатывает комбинацию — PDF в

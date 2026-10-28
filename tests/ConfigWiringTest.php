@@ -10,8 +10,10 @@ use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
 use Rasuvaeff\Yii3Filestorage\Repository\MaintenanceRepositoryInterface;
 use Rasuvaeff\Yii3Filestorage\Repository\RepositoryInterface;
 use Rasuvaeff\Yii3Filestorage\StorageInterface;
+use Rasuvaeff\Yii3Filestorage\Store\DerivativeResolverInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoreRegistry;
+use Rasuvaeff\Yii3Filestorage\Url\ProxyUrlGeneratorInterface;
 use Rasuvaeff\Yii3FilestorageImages\Command\WarmCommand;
 use Rasuvaeff\Yii3FilestorageImages\Derivatives;
 use Rasuvaeff\Yii3FilestorageImages\PresetRegistry;
@@ -23,6 +25,8 @@ use Rasuvaeff\Yii3FilestorageImages\Tests\Support\DerivativeAwareMemoryStore;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Fixtures;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\MemoryMaintenanceRepository;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\PredictableMutexFactory;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\SignedProxyUrlGenerator;
+use ReflectionProperty;
 use Testo\Assert;
 use Testo\Codecov\CoversNothing;
 use Testo\Test;
@@ -51,6 +55,33 @@ final class ConfigWiringTest
         Assert::instanceOf($container->get(SvgSanitizerInterface::class), EnshrinedSvgSanitizer::class);
         Assert::instanceOf($container->get(Derivatives::class), Derivatives::class);
         Assert::instanceOf($container->get(WarmCommand::class), WarmCommand::class);
+        // The core contract resolves to the facade — that alias is what lets
+        // `-web`'s download action pick the resolver up without either
+        // package depending on the other.
+        $resolver = $container->get(DerivativeResolverInterface::class);
+        Assert::instanceOf($resolver, Derivatives::class);
+        Assert::instanceOf($resolver, DerivativeResolverInterface::class);
+    }
+
+    /**
+     * The factory's optional parameter is not decorative: with
+     * `ProxyUrlGeneratorInterface` bound — what installing
+     * `yii3-filestorage-web` does — the facade must receive it, and without
+     * it the parameter falls back to null rather than failing to resolve.
+     */
+    public function theProxyGeneratorFlowsInWhenBound(): void
+    {
+        $definitions = $this->definitions();
+        $definitions += $this->serviceDoubles();
+        $definitions[ProxyUrlGeneratorInterface::class] = static fn(): ProxyUrlGeneratorInterface
+            => new SignedProxyUrlGenerator();
+
+        $withProxy = new Container(ContainerConfig::create()->withDefinitions($definitions));
+        $proxy = new ReflectionProperty(Derivatives::class, 'proxyUrls');
+        Assert::instanceOf($proxy->getValue($withProxy->get(Derivatives::class)), SignedProxyUrlGenerator::class);
+
+        $withoutProxy = new Container(ContainerConfig::create()->withDefinitions($this->definitions() + $this->serviceDoubles()));
+        Assert::null($proxy->getValue($withoutProxy->get(Derivatives::class)));
     }
 
     public function shippedPresetParamsBuildTheDocumentedShape(): void
@@ -130,20 +161,30 @@ final class ConfigWiringTest
 
     private function container(): Container
     {
-        $definitions = $this->definitions();
+        return new Container(ContainerConfig::create()->withDefinitions($this->definitions() + $this->serviceDoubles()));
+    }
 
-        $definitions[ClockInterface::class] = static fn(): ClockInterface => new StaticClock(Fixtures::now());
-        $definitions[StreamFactoryInterface::class] = static fn(): StreamFactoryInterface => Fixtures::factory();
-        $definitions[MutexFactoryInterface::class] = static fn(): MutexFactoryInterface
-            => new PredictableMutexFactory();
-        $definitions[StoreRegistry::class] = static fn(): StoreRegistry
-            => new StoreRegistry([new DerivativeAwareMemoryStore()]);
-        $definitions[DeliveryPolicyRegistry::class] = static fn(): DeliveryPolicyRegistry
-            => new DeliveryPolicyRegistry();
-        $definitions[MaintenanceRepositoryInterface::class] = static fn(): MaintenanceRepositoryInterface
-            => new MemoryMaintenanceRepository();
-
-        return new Container(ContainerConfig::create()->withDefinitions($definitions));
+    /**
+     * The pieces this package expects the application (or its sibling
+     * packages) to provide: a clock, stream factories, a mutex driver, the
+     * stores, the delivery policies and the maintenance repository.
+     *
+     * @return array<class-string, callable>
+     */
+    private function serviceDoubles(): array
+    {
+        return [
+            ClockInterface::class => static fn(): ClockInterface => new StaticClock(Fixtures::now()),
+            StreamFactoryInterface::class => static fn(): StreamFactoryInterface => Fixtures::factory(),
+            MutexFactoryInterface::class => static fn(): MutexFactoryInterface
+                => new PredictableMutexFactory(),
+            StoreRegistry::class => static fn(): StoreRegistry
+                => new StoreRegistry([new DerivativeAwareMemoryStore()]),
+            DeliveryPolicyRegistry::class => static fn(): DeliveryPolicyRegistry
+                => new DeliveryPolicyRegistry(),
+            MaintenanceRepositoryInterface::class => static fn(): MaintenanceRepositoryInterface
+                => new MemoryMaintenanceRepository(),
+        ];
     }
 
     /**

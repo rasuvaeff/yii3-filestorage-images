@@ -7,8 +7,10 @@ namespace Rasuvaeff\Yii3FilestorageImages\Tests;
 use DateInterval;
 use Rasuvaeff\Understudy\Arg;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
+use Rasuvaeff\Yii3Filestorage\Store\DerivativeResolverInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoreRegistry;
 use Rasuvaeff\Yii3Filestorage\Test\InMemoryStore;
+use Rasuvaeff\Yii3Filestorage\Url\ProxyUrlGeneratorInterface;
 use Rasuvaeff\Yii3FilestorageImages\Derivatives;
 use Rasuvaeff\Yii3FilestorageImages\Exception\DerivativeGenerationException;
 use Rasuvaeff\Yii3FilestorageImages\Exception\UnknownPresetException;
@@ -21,6 +23,7 @@ use Rasuvaeff\Yii3FilestorageImages\Tests\Support\DerivativeAwareMemoryStore;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\DerivativeUrlMemoryStore;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Doubles;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Fixtures;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\SignedProxyUrlGenerator;
 use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Expect;
@@ -212,6 +215,73 @@ final class DerivativesTest
         Assert::true($this->derivatives()->exists($file, 'thumb'));
     }
 
+    /**
+     * The facade *is* the resolver `-web` consumes: same methods, same
+     * semantics — the contract only formalises what already existed.
+     */
+    public function implementsTheCoreResolverContract(): void
+    {
+        Assert::instanceOf($this->derivatives(), DerivativeResolverInterface::class);
+    }
+
+    /**
+     * A private filesystem store has no URL capability of its own — most
+     * installations — so the signed proxy route through the application is
+     * the last resort, exactly as core's `Storage::urlFor()` treats it.
+     */
+    public function urlForFallsBackToTheSignedProxyWhenTheStoreHasNoUrls(): void
+    {
+        $proxy = new SignedProxyUrlGenerator();
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        $url = $this->derivatives(proxyUrls: $proxy)->urlFor($file, 'thumb');
+
+        Assert::string((string) $url)->contains("https://app.example.test/files/{$file->id}/thumb/");
+        Assert::same($proxy->lastVariant, 'thumb');
+        // The default TTL applies to the proxy URL as it would to a store one.
+        Assert::same(
+            $proxy->lastExpiresAt?->format('U.u'),
+            Fixtures::now()->add(new DateInterval('PT1H'))->format('U.u'),
+        );
+    }
+
+    /**
+     * An explicit expiry reaches the proxy token too, not only store-native
+     * URLs.
+     */
+    public function theProxyFallbackHonorsAnExplicitExpiry(): void
+    {
+        $proxy = new SignedProxyUrlGenerator();
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $expires = Fixtures::now()->modify('+2 hours');
+
+        $url = $this->derivatives(proxyUrls: $proxy)->urlFor($file, 'thumb', $expires);
+
+        Assert::string((string) $url)->contains('/' . $expires->getTimestamp());
+    }
+
+    /**
+     * The proxy is genuinely the *last* resort: a store that can mint URLs
+     * but declines (its URLs cannot carry the policy) wins nothing — the
+     * proxy stands in.
+     */
+    public function theProxyIsUsedWhenTheStoreDeclinesToMintOne(): void
+    {
+        $urlStore = new DerivativeUrlMemoryStore($this->store, publicUrls: false, temporaryUrls: false);
+        $proxy = new SignedProxyUrlGenerator();
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        $url = $this->derivatives(
+            stores: new StoreRegistry([$urlStore]),
+            proxyUrls: $proxy,
+        )->urlFor($file, 'thumb');
+
+        Assert::string((string) $url)->contains("https://app.example.test/files/{$file->id}/thumb/");
+    }
+
     public function urlForPrefersPublicOnlyWhenThePolicyAllowsIt(): void
     {
         $urlStore = new DerivativeUrlMemoryStore($this->store);
@@ -278,6 +348,7 @@ final class DerivativesTest
         ?DeliveryPolicyRegistry $deliveryPolicies = null,
         ?ImageProcessorInterface $processor = null,
         int $maxSourceBytes = 67_108_864,
+        ?ProxyUrlGeneratorInterface $proxyUrls = null,
     ): Derivatives {
         return new Derivatives(
             stores: $stores ?? new StoreRegistry([$this->store]),
@@ -287,6 +358,7 @@ final class DerivativesTest
             deliveryPolicies: $deliveryPolicies ?? new DeliveryPolicyRegistry(),
             clock: new StaticClock(Fixtures::now()),
             maxSourceBytes: $maxSourceBytes,
+            proxyUrls: $proxyUrls,
         );
     }
 }
