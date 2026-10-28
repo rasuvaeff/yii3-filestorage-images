@@ -16,6 +16,7 @@ The file's store must implement the core
 (both core filesystem stores and `FlysystemStore` do).
 A processor extension is needed at runtime: ext-gd and/or ext-imagick.
 
+`Srcset::for(Derivatives, PresetRegistry, File, ?array $presetNames = null, ?DateTimeImmutable $expiresAt = null): ?string` — 'url Ww, …' from preset widths; null when nothing yields a URL.
 `ImageMetadataStorage implements StorageInterface` — decorator over the
 facade: `add()` records `width`/`height` into `File::$metadata` from the
 bounded image header (policy's recipe; anything unparseable passes through
