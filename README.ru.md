@@ -136,7 +136,8 @@ final readonly class AvatarPresenter
 потребляет download-экшен из `yii3-filestorage-web` для отдачи variant-токенов,
 так что установка обоих пакетов и есть вся проводка: `urlFor()` начинает
 отдавать подписанные прокси-URL для приватного filesystem-стора, и эти URL
-разрешаются. `UnknownPresetException` наследует core-овский
+разрешаются (`yii3-filestorage-web` 0.3.0+ — более ранние релизы требуют
+старое ядро и variant-токены не отдают). `UnknownPresetException` наследует core-овский
 `UnresolvableVariantException` — сигнал «ответь 404».
 
 Словарь ошибок: `UnknownPresetException` (нет в whitelist — мапьте в 404),

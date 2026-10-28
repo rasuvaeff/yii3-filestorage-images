@@ -134,7 +134,8 @@ The facade implements core's `DerivativeResolverInterface` — that contract is
 what `yii3-filestorage-web`'s download action consumes to serve variant
 tokens, so installing both packages is the whole wiring: `urlFor()` starts
 returning signed proxy URLs for a private filesystem store, and those URLs
-resolve. `UnknownPresetException` extends core's
+resolve (`yii3-filestorage-web` 0.3.0+ — earlier releases require an older
+core and do not serve variant tokens). `UnknownPresetException` extends core's
 `UnresolvableVariantException`, the "map it to 404" signal.
 
 Failure vocabulary: `UnknownPresetException` (not in the whitelist — map it to

@@ -6,7 +6,9 @@ use Psr\Clock\ClockInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
 use Rasuvaeff\Yii3Filestorage\Repository\MaintenanceRepositoryInterface;
+use Rasuvaeff\Yii3Filestorage\Store\DerivativeResolverInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoreRegistry;
+use Rasuvaeff\Yii3Filestorage\Url\ProxyUrlGeneratorInterface;
 use Rasuvaeff\Yii3FilestorageImages\Command\WarmCommand;
 use Rasuvaeff\Yii3FilestorageImages\Derivatives;
 use Rasuvaeff\Yii3FilestorageImages\PresetRegistry;
@@ -48,6 +50,7 @@ return [
         MutexFactoryInterface $mutexes,
         DeliveryPolicyRegistry $deliveryPolicies,
         ClockInterface $clock,
+        ?ProxyUrlGeneratorInterface $proxyUrls = null,
     ): Derivatives => new Derivatives(
         stores: $stores,
         presets: $presets,
@@ -58,7 +61,16 @@ return [
         defaultUrlTtl: new DateInterval($params['rasuvaeff/yii3-filestorage-images']['defaultUrlTtl']),
         lockTimeoutSeconds: $params['rasuvaeff/yii3-filestorage-images']['lockTimeout'],
         maxSourceBytes: $params['rasuvaeff/yii3-filestorage-images']['maxSourceBytes'],
+        // Null without yii3-filestorage-web, the signed proxy route when it
+        // is installed and binds the generator — the container resolves the
+        // nullable either way.
+        proxyUrls: $proxyUrls,
     ),
+
+    // The reference implementation of the core contract. `-web`'s download
+    // action takes it as a nullable dependency; an application wanting its
+    // own resolver overrides this binding in its own layer.
+    DerivativeResolverInterface::class => static fn (Derivatives $derivatives): DerivativeResolverInterface => $derivatives,
 
     WarmCommand::class => static fn (
         Derivatives $derivatives,
