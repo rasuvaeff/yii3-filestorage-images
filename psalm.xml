@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<psalm
+    errorLevel="1"
+    findUnusedCode="false"
+    resolveFromConfigFile="true"
+>
+    <projectFiles>
+        <directory name="src"/>
+        <ignoreFiles>
+            <directory name="vendor"/>
+        </ignoreFiles>
+    </projectFiles>
+
+    <!-- ext-gd / ext-imagick are optional runtime backends (suggest, not
+         require), so analysis must not depend on either being loaded. -->
+    <stubs>
+        <file name="stubs/gd.phpstub"/>
+        <file name="stubs/imagick.phpstub"/>
+    </stubs>
+</psalm>

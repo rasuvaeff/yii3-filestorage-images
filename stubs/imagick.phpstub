@@ -1,0 +1,86 @@
+<?php
+
+/**
+ * Minimal ext-imagick stub: only what ImagickImageProcessor calls, typed the
+ * way the extension actually behaves. Psalm ships no imagick stubs and the
+ * composer:2 image does not load the extension.
+ */
+
+class ImagickException extends Exception {}
+
+class Imagick
+{
+    public const int FILTER_LANCZOS = 22;
+    public const int ALPHACHANNEL_REMOVE = 12;
+
+    public const int ORIENTATION_UNDEFINED = 0;
+    public const int ORIENTATION_TOPLEFT = 1;
+    public const int ORIENTATION_TOPRIGHT = 2;
+    public const int ORIENTATION_BOTTOMRIGHT = 3;
+    public const int ORIENTATION_BOTTOMLEFT = 4;
+    public const int ORIENTATION_LEFTTOP = 5;
+    public const int ORIENTATION_RIGHTTOP = 6;
+    public const int ORIENTATION_RIGHTBOTTOM = 7;
+    public const int ORIENTATION_LEFTBOTTOM = 8;
+
+    /**
+     * @return list<string>
+     */
+    public static function queryFormats(string $pattern = '*'): array {}
+
+    public function readImageBlob(string $image, ?string $filename = null): bool {}
+
+    /**
+     * @return int<0, max>
+     */
+    public function getNumberImages(): int {}
+
+    public function setIteratorIndex(int $index): bool {}
+
+    public function getImage(): Imagick {}
+
+    public function getImageOrientation(): int {}
+
+    public function setImageOrientation(int $orientation): bool {}
+
+    public function flopImage(): bool {}
+
+    public function rotateImage(mixed $background, float $degrees): bool {}
+
+    /**
+     * @return int<0, max>
+     */
+    public function getImageWidth(): int {}
+
+    /**
+     * @return int<0, max>
+     */
+    public function getImageHeight(): int {}
+
+    public function cropImage(int $width, int $height, int $x, int $y): bool {}
+
+    public function setImagePage(int $width, int $height, int $x, int $y): bool {}
+
+    public function resizeImage(
+        int $columns,
+        int $rows,
+        int $filter,
+        float $blur,
+        bool $bestfit = false,
+        bool $legacy = false,
+    ): bool {}
+
+    public function setImageBackgroundColor(mixed $background): bool {}
+
+    public function setImageAlphaChannel(int $mode): bool {}
+
+    public function stripImage(): bool {}
+
+    public function setImageFormat(string $format): bool {}
+
+    public function setImageCompressionQuality(int $quality): bool {}
+
+    public function getImageBlob(): string {}
+
+    public function clear(): bool {}
+}
