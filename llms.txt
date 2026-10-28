@@ -74,9 +74,14 @@ public function descriptor(string $presetName): DerivativeDescriptor; // e.g. th
 ```
 
 `urlFor()` order: direct public URL (only when the group's `DeliveryPolicy`
-has `allowDirectPublicUrl`) → store-native temporary URL → `null` (serve the
-stream yourself). Requires the store to implement
-`DerivativeUrlProviderInterface` for non-null results.
+has `allowDirectPublicUrl`) → store-native temporary URL → signed proxy URL
+(when yii3-filestorage-web is installed; the variant is inside the HMAC) →
+`null` (serve the stream yourself).
+
+`Derivatives` implements core's `Store\DerivativeResolverInterface` —
+`stream()`/`descriptor()` are that contract; `-web`'s download action serves
+variant tokens through it. `UnknownPresetException` extends core's
+`UnresolvableVariantException` (the "map to 404" signal).
 
 Throws: `UnknownPresetException`, `UnsupportedSourceException` (skip-grade:
 unprocessable combination or over a guard), `ProcessingFailedException`

@@ -6,6 +6,7 @@ namespace Rasuvaeff\Yii3FilestorageImages;
 
 use DateInterval;
 use DateTimeImmutable;
+use Override;
 use Psr\Clock\ClockInterface;
 use Psr\Http\Message\StreamInterface;
 use Rasuvaeff\Yii3Filestorage\File;
@@ -13,8 +14,10 @@ use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
 use Rasuvaeff\Yii3Filestorage\Store\BlobId;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeAwareStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeDescriptor;
+use Rasuvaeff\Yii3Filestorage\Store\DerivativeResolverInterface;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeUrlProviderInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoreRegistry;
+use Rasuvaeff\Yii3Filestorage\Url\ProxyUrlGeneratorInterface;
 use Rasuvaeff\Yii3FilestorageImages\Exception\DerivativeGenerationException;
 use Rasuvaeff\Yii3FilestorageImages\Exception\ProcessingFailedException;
 use Rasuvaeff\Yii3FilestorageImages\Exception\UnknownPresetException;
@@ -42,7 +45,7 @@ use Yiisoft\Mutex\MutexFactoryInterface;
  *
  * @api
  */
-final readonly class Derivatives
+final readonly class Derivatives implements DerivativeResolverInterface
 {
     /**
      * @param int<0, max> $lockTimeoutSeconds How long a second requester waits
@@ -51,6 +54,11 @@ final readonly class Derivatives
      *        size; zero means no cap. Checked against the stored row's size —
      *        the processors re-enforce their own byte cap while reading, so a
      *        row that lies about its size does not bypass the guard.
+     * @param ProxyUrlGeneratorInterface|null $proxyUrls The signed proxy route
+     *        through the application — bound by installing
+     *        `rasuvaeff/yii3-filestorage-web` — and the last resort of
+     *        {@see urlFor()} when the store has no URL capability of its own,
+     *        exactly as core's `Storage::urlFor()` treats it.
      */
     public function __construct(
         private StoreRegistry $stores,
@@ -62,6 +70,7 @@ final readonly class Derivatives
         private DateInterval $defaultUrlTtl = new DateInterval('PT1H'),
         private int $lockTimeoutSeconds = 30,
         private int $maxSourceBytes = 67_108_864,
+        private ?ProxyUrlGeneratorInterface $proxyUrls = null,
     ) {}
 
     /**
@@ -72,6 +81,7 @@ final readonly class Derivatives
      *
      * @throws UnknownPresetException
      */
+    #[Override]
     public function descriptor(string $presetName): DerivativeDescriptor
     {
         return $this->presets->get($presetName)->descriptor();
@@ -187,6 +197,7 @@ final readonly class Derivatives
      * @throws ProcessingFailedException
      * @throws DerivativeGenerationException
      */
+    #[Override]
     public function stream(File $file, string $presetName): ?StreamInterface
     {
         $this->ensure($file, $presetName);
@@ -198,14 +209,12 @@ final readonly class Derivatives
     }
 
     /**
-     * A URL for the rendition, generated on demand and policy-gated exactly
-     * like `Storage::urlFor()` for originals: a permanent public URL only when
-     * the group's delivery policy allows direct public delivery, then a
-     * store-native expiring URL.
-     *
-     * Null when the store has no URL capability for derivatives. The local
-     * signed proxy route for variants arrives with `-web`'s variant support;
-     * until then a null here means "serve it yourself via {@see stream()}".
+     * A URL for the rendition, policy-gated exactly like `Storage::urlFor()`
+     * for originals: a permanent public URL only when the group's delivery
+     * policy allows direct public delivery, then a store-native expiring URL,
+     * and — as the last resort — the application's signed proxy route,
+     * {@see DerivativeResolverInterface} makes this facade consumable by
+     * `-web` directly.
      *
      * @param non-empty-string $presetName
      *
@@ -223,25 +232,30 @@ final readonly class Derivatives
         // and a CDN-backed public prefix does not.
         $this->ensure($file, $presetName);
 
+        $expires = $expiresAt ?? $this->clock->now()->add($this->defaultUrlTtl);
         $store = $this->derivativeStore($file);
-        if (!$store instanceof DerivativeUrlProviderInterface) {
-            return null;
-        }
 
-        $descriptor = $this->presets->get($presetName)->descriptor();
+        if ($store instanceof DerivativeUrlProviderInterface) {
+            $descriptor = $this->presets->get($presetName)->descriptor();
 
-        if ($this->deliveryPolicies->for($file->groupName)->allowDirectPublicUrl) {
-            $public = $store->publicDerivativeUrl($file, $descriptor);
-            if ($public !== null) {
-                return $public;
+            if ($this->deliveryPolicies->for($file->groupName)->allowDirectPublicUrl) {
+                $public = $store->publicDerivativeUrl($file, $descriptor);
+                if ($public !== null) {
+                    return $public;
+                }
+            }
+
+            $temporary = $store->temporaryDerivativeUrl($file, $descriptor, $expires);
+            if ($temporary !== null) {
+                return $temporary;
             }
         }
 
-        return $store->temporaryDerivativeUrl(
-            $file,
-            $descriptor,
-            $expiresAt ?? $this->clock->now()->add($this->defaultUrlTtl),
-        );
+        // The store has nothing to offer: the signed proxy route through the
+        // application is the last resort, exactly as core's `Storage::urlFor()`
+        // treats it for originals. The variant travels inside the HMAC, so a
+        // thumbnail URL cannot be replayed for the full-resolution file.
+        return $this->proxyUrls?->variantUrl($file, $presetName, $expires);
     }
 
     /**

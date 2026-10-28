@@ -114,8 +114,9 @@ final readonly class AvatarPresenter
     {
         // Generates lazily if missing, then: a permanent public URL when the
         // group's delivery policy allows direct public delivery, otherwise a
-        // store-native expiring URL. Null when the store has no URL capability
-        // for derivatives — serve the stream yourself in that case.
+        // store-native expiring URL, otherwise the application's signed proxy
+        // route when yii3-filestorage-web is installed. Null only when
+        // neither exists — serve the stream yourself in that case.
         return $this->derivatives->urlFor($file, 'thumb');
     }
 }
@@ -125,9 +126,16 @@ final readonly class AvatarPresenter
 |---|---|
 | `ensure(File $file, string $preset): bool` | Guarantees the rendition exists; generates under the stampede lock. Returns `true` when this call generated it |
 | `stream(File $file, string $preset): ?StreamInterface` | The rendition's bytes, generating first if needed |
-| `urlFor(File $file, string $preset, ?DateTimeImmutable $expiresAt = null): ?string` | Policy-gated URL: direct public → store-native temporary → `null` |
+| `urlFor(File $file, string $preset, ?DateTimeImmutable $expiresAt = null): ?string` | Policy-gated URL: direct public → store-native temporary → signed proxy (`-web`) → `null` |
 | `exists(File $file, string $preset): bool` | Pure probe, never generates |
 | `descriptor(string $preset): DerivativeDescriptor` | The physical identity (`thumb-v1.webp`) a store addresses the rendition by |
+
+The facade implements core's `DerivativeResolverInterface` — that contract is
+what `yii3-filestorage-web`'s download action consumes to serve variant
+tokens, so installing both packages is the whole wiring: `urlFor()` starts
+returning signed proxy URLs for a private filesystem store, and those URLs
+resolve. `UnknownPresetException` extends core's
+`UnresolvableVariantException`, the "map it to 404" signal.
 
 Failure vocabulary: `UnknownPresetException` (not in the whitelist — map it to
 404), `UnsupportedSourceException` (this installation cannot process the

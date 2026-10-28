@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- `Derivatives` implements core's `Store\DerivativeResolverInterface` —
+  the contract `-web` consumes to serve variant tokens. #2
+- `urlFor()` falls back to the signed proxy route: direct public →
+  store-native temporary → `ProxyUrlGeneratorInterface::variantUrl()` (bound
+  by installing `rasuvaeff/yii3-filestorage-web`) → null. A private
+  filesystem store now gets URLs instead of "write your own controller". #2
+- `UnknownPresetException` extends core's `UnresolvableVariantException`. #2
+- Requires `rasuvaeff/yii3-filestorage: ^0.2`.
+
 ## 0.1.0 — 2026-10-28
 
 First release. Tracks `rasuvaeff/yii3-filestorage` `0.x`: the API settles
