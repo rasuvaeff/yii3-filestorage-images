@@ -53,7 +53,7 @@
     "suggest": {
         "ext-gd": "Required by GdImageProcessor",
         "ext-imagick": "Required by ImagickImageProcessor",
-        "rasuvaeff/yii3-filestorage-web": "Serves lazily generated derivatives through signed variant URLs",
+        "rasuvaeff/yii3-filestorage-web": "Signed proxy download URLs; serving variant tokens is planned for a later -web release — Derivatives::urlFor() covers store-native URLs meanwhile",
         "yiisoft/mutex-file": "A mutex driver for the derivative generation lock"
     },
     "autoload": {
