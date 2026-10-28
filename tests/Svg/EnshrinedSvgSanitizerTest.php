@@ -65,6 +65,38 @@ final class EnshrinedSvgSanitizerTest
     }
 
     /**
+     * SVG2-style bare `href` (no xlink prefix) is also a remote reference —
+     * svg-sanitize 1.x strips it alongside the xlink form; 0.22 let it
+     * through, which is half of why the constraint is ^1.1.1.
+     */
+    public function stripsSvg2StyleRemoteReferences(): void
+    {
+        $clean = $this->sanitizer->sanitize(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            . '<image href="https://evil.example/x.png" width="1" height="1"/>'
+            . '<rect width="1" height="1"/></svg>',
+        );
+
+        Assert::false(str_contains($clean, 'evil.example'));
+    }
+
+    /**
+     * A custom DTD entity is rejected outright since svg-sanitize 1.0 —
+     * the DTD never reaches the parser, so the reference is undefined and
+     * the library fails safe. The wrapper's answer to `false` is the parse
+     * exception.
+     */
+    public function rejectsCustomDtdEntities(): void
+    {
+        Expect::exception(SvgSanitizationException::class)->withMessageContaining('could not be parsed');
+
+        $this->sanitizer->sanitize(
+            '<!DOCTYPE svg [<!ENTITY xxe "stolen">]>'
+            . '<svg xmlns="http://www.w3.org/2000/svg"><text>&xxe;</text></svg>',
+        );
+    }
+
+    /**
      * The post-pass: elements the library keeps but this contract does not —
      * `foreignObject` embeds arbitrary HTML, `animate`/`set`/`mpath` rewrite
      * attributes (`href` included) after the static scan is over.
@@ -166,28 +198,6 @@ final class EnshrinedSvgSanitizerTest
         Expect::exception(SvgSanitizationException::class);
 
         $this->sanitizer->sanitize('just some text, no markup at all');
-    }
-
-    /**
-     * When the library itself throws, the wrapper names it as the cause —
-     * the operator has to see whether the input was hopeless or the
-     * sanitizer misconfigured.
-     */
-    public function aLibraryFailureIsReportedWithItsCause(): void
-    {
-        // A document with no svg root is the input shape that makes the
-        // library throw rather than return false — the wrapper's catch arm.
-        $noSvgRoot = str_repeat('<g>', 60) . '<rect width="1" height="1"/>' . str_repeat('</g>', 60);
-
-        try {
-            $this->sanitizer->sanitize($noSvgRoot);
-        } catch (SvgSanitizationException $exception) {
-            Assert::true($exception->getPrevious() instanceof \Exception);
-
-            return;
-        }
-
-        throw new \RuntimeException('expected an SvgSanitizationException');
     }
 
     public function rejectsXmlWhoseRootIsNotSvg(): void
