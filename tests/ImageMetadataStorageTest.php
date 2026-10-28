@@ -13,6 +13,7 @@ use Rasuvaeff\Yii3Filestorage\Upload;
 use Rasuvaeff\Yii3FilestorageImages\ImageMetadataStorage;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Fixtures;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Png;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\TrickleStream;
 use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Test;
@@ -61,6 +62,21 @@ final class ImageMetadataStorageTest
     }
 
     /** The prefix read rewinds — the storage behind must see the same bytes. */
+    /**
+     * PSR-7 permits short reads — a stream handing out one byte at a time must
+     * still yield a complete header, so the dimensions are recorded anyway.
+     */
+    public function shortReadsStillYieldTheHeader(): void
+    {
+        $storage = $this->inner();
+
+        $body = Png::header(640, 480) . 'body';
+        $upload = Upload::fromStream(new TrickleStream($body), 'a.png', Fixtures::factory());
+        $this->decorated($storage)->add($upload);
+
+        Assert::same($this->capturedMetadata($storage), ['width' => 640, 'height' => 480]);
+    }
+
     public function theInnerStorageSeesTheWholeUpload(): void
     {
         $storage = $this->inner();

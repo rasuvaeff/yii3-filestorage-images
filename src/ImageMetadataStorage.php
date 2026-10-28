@@ -104,21 +104,30 @@ final readonly class ImageMetadataStorage implements StorageInterface
     }
 
     /**
-     * The header-only dimensions, or nothing. The stream is rewound after the
-     * prefix read — the storage behind this decorator reads the same bytes.
+     * The header-only dimensions, or nothing. The prefix is read to the limit
+     * or EOF (PSR-7 permits short reads — a single `read()` may return less
+     * than asked, so the reader loops); `Upload::stream()` itself is always
+     * rewound, so the storage behind reads the same bytes.
      *
      * @return array{width: int, height: int}|array<never, never>
      */
     private function dimensions(Upload $upload): array
     {
         $stream = $upload->stream();
-        $header = $stream->read(UploadPolicy::MAX_IMAGE_HEADER_BYTES);
-        $stream->rewind();
+        $header = '';
+        while (strlen($header) < UploadPolicy::MAX_IMAGE_HEADER_BYTES) {
+            $chunk = $stream->read(UploadPolicy::MAX_IMAGE_HEADER_BYTES - strlen($header));
+            if ($chunk === '') {
+                break;
+            }
 
-        // getimagesizefromstring() answers false or a real pair — a 0x0
-        // result is not something it produces for parseable input.
+            $header .= $chunk;
+        }
+
         $size = @getimagesizefromstring($header);
-        if ($size === false) {
+        // PHP documents zero width/height for formats whose size it cannot
+        // determine — indeterminate is not a dimension, so it is not recorded.
+        if ($size === false || $size[0] === 0 || $size[1] === 0) {
             return [];
         }
 
