@@ -224,6 +224,14 @@ jobs:
           key: property-db-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Mutation testing
+        # The render tests above prove the PDF preview on this runner; under
+        # Infection the first ghostscript render takes the whole Testo suite
+        # down with a SIGTERM (Ubuntu's ImageMagick6 delegate; Alpine/IM7 in
+        # the local `make mutation` gate runs everything). The flag skips
+        # only the renders here - `refusesOtherSources` and every other test
+        # still run mutated.
+        env:
+          SKIP_PDF_RENDERS: 1
         run: composer mutation
 
   compatibility:

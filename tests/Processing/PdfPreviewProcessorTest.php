@@ -27,6 +27,15 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
+        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+            // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
+            // suite to a SIGTERM the first time a ghostscript render runs
+            // under Infection; Alpine/ImageMagick7 — the local `make
+            // mutation` gate — runs the full suite with renders. The direct
+            // coverage step on CI executes every render test on every push.
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
+        }
+
         $processed = $this->processor()->process(
             $this->stream(Pdf::page(200, 100)),
             'application/pdf',
@@ -68,6 +77,15 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
+        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+            // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
+            // suite to a SIGTERM the first time a ghostscript render runs
+            // under Infection; Alpine/ImageMagick7 — the local `make
+            // mutation` gate — runs the full suite with renders. The direct
+            // coverage step on CI executes every render test on every push.
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
+        }
+
         $processor = new PdfPreviewProcessor(new Psr17Factory(), maxSourceBytes: 1_048_576, maxSourcePixels: 100_000);
 
         Expect::exception(ProcessingFailedException::class)->withMessageContaining('pixel cap');
@@ -84,6 +102,15 @@ final class PdfPreviewProcessorTest
     {
         if (!$this->available()) {
             throw new SkipTest('the imagick PDF delegate is not available');
+        }
+
+        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+            // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
+            // suite to a SIGTERM the first time a ghostscript render runs
+            // under Infection; Alpine/ImageMagick7 — the local `make
+            // mutation` gate — runs the full suite with renders. The direct
+            // coverage step on CI executes every render test on every push.
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
         }
 
         $processed = $this->processor()->process(
@@ -103,6 +130,15 @@ final class PdfPreviewProcessorTest
     {
         if (!$this->available()) {
             throw new SkipTest('the imagick PDF delegate is not available');
+        }
+
+        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+            // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
+            // suite to a SIGTERM the first time a ghostscript render runs
+            // under Infection; Alpine/ImageMagick7 — the local `make
+            // mutation` gate — runs the full suite with renders. The direct
+            // coverage step on CI executes every render test on every push.
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
         }
         if (getenv('INFECTION')) {
             // A ghostscript fatal abort sends SIGTERM to its process group,
@@ -131,6 +167,15 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
+        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+            // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
+            // suite to a SIGTERM the first time a ghostscript render runs
+            // under Infection; Alpine/ImageMagick7 — the local `make
+            // mutation` gate — runs the full suite with renders. The direct
+            // coverage step on CI executes every render test on every push.
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
+        }
+
         // Baseline 200x100 = 20,000 px; the cap exactly that holds the render
         // to the 72-DPI baseline (sqrt(1) = 1).
         $processor = new PdfPreviewProcessor(new Psr17Factory(), maxSourceBytes: 1_048_576, maxSourcePixels: 20_000);
@@ -151,6 +196,15 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
+        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+            // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
+            // suite to a SIGTERM the first time a ghostscript render runs
+            // under Infection; Alpine/ImageMagick7 — the local `make
+            // mutation` gate — runs the full suite with renders. The direct
+            // coverage step on CI executes every render test on every push.
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
+        }
+
         $processor = new PdfPreviewProcessor(new Psr17Factory(), maxSourceBytes: 1_048_576, maxSourcePixels: 0);
 
         $processed = $processor->process(
@@ -167,6 +221,15 @@ final class PdfPreviewProcessorTest
     {
         if (!$this->available()) {
             throw new SkipTest('the imagick PDF delegate is not available');
+        }
+
+        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+            // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
+            // suite to a SIGTERM the first time a ghostscript render runs
+            // under Infection; Alpine/ImageMagick7 — the local `make
+            // mutation` gate — runs the full suite with renders. The direct
+            // coverage step on CI executes every render test on every push.
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
         }
 
         Expect::exception(ProcessingFailedException::class);
@@ -187,6 +250,15 @@ final class PdfPreviewProcessorTest
     {
         if (!$this->available()) {
             throw new SkipTest('the imagick PDF delegate is not available');
+        }
+
+        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+            // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
+            // suite to a SIGTERM the first time a ghostscript render runs
+            // under Infection; Alpine/ImageMagick7 — the local `make
+            // mutation` gate — runs the full suite with renders. The direct
+            // coverage step on CI executes every render test on every push.
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
         }
 
         // Page 200x100 pt = 20,000 px at the 72-DPI baseline; the cap just
@@ -211,6 +283,15 @@ final class PdfPreviewProcessorTest
     {
         if (!$this->available()) {
             throw new SkipTest('the imagick PDF delegate is not available');
+        }
+
+        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+            // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
+            // suite to a SIGTERM the first time a ghostscript render runs
+            // under Infection; Alpine/ImageMagick7 — the local `make
+            // mutation` gate — runs the full suite with renders. The direct
+            // coverage step on CI executes every render test on every push.
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
         }
         if (getenv('INFECTION')) {
             // A ghostscript fatal abort sends SIGTERM to its process group,
