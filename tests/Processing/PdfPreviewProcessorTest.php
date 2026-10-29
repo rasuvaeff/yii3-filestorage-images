@@ -219,9 +219,34 @@ final class PdfPreviewProcessorTest
         return new PdfPreviewProcessor(new Psr17Factory());
     }
 
+    private static ?bool $available = null;
+
+    /**
+     * A functional probe, not a registry check: a runner can carry imagick
+     * with the PDF delegate listed while the ghostscript binary itself is
+     * absent — `queryFormats('PDF')` is true there and every render dies on
+     * `gs: not found`. Ping a real one-page PDF once and let the delegate
+     * prove itself.
+     */
     private function available(): bool
     {
-        return \extension_loaded('imagick') && \Imagick::queryFormats('PDF') !== [];
+        if (self::$available !== null) {
+            return self::$available;
+        }
+
+        if (!\extension_loaded('imagick') || \Imagick::queryFormats('PDF') === []) {
+            return self::$available = false;
+        }
+
+        try {
+            $ping = new \Imagick();
+            $ping->pingImageBlob(Pdf::page(1, 1));
+            $ping->clear();
+
+            return self::$available = true;
+        } catch (\Throwable) {
+            return self::$available = false;
+        }
     }
 
     private function stream(string $bytes): \Psr\Http\Message\StreamInterface
