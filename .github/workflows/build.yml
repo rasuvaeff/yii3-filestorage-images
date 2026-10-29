@@ -197,6 +197,13 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
 
+      # The PDF preview tests run against real renders: imagick (from
+      # setup-php) lists the PDF delegate but needs the ghostscript binary
+      # to execute it. Without this the probe skips those tests and the
+      # mutation gate sees a different package than the one shipped.
+      - name: Install ghostscript (imagick PDF delegate)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ghostscript
+
       - name: Restore property regression corpus
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
