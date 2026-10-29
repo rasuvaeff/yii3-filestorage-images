@@ -59,15 +59,17 @@ final readonly class CompositeImageProcessor implements ImageProcessorInterface
                 maxSourcePixels: $maxSourcePixels,
             );
         }
-        // Keyed by source MIME, not by extension: the PDF preview joins the
-        // line-up whenever the imagick delegate for it exists, and supports()
-        // answers nothing for raster sources, so the order above is
-        // undisturbed.
-        $processors[] = new PdfPreviewProcessor(
-            streams: $streams,
-            maxSourceBytes: $maxSourceBytes,
-            maxSourcePixels: $maxSourcePixels,
-        );
+        // Keyed by source MIME, not by extension: the PDF preview rides on
+        // imagick and answers nothing for raster sources, so the order above
+        // is undisturbed — and a runtime with neither extension keeps the
+        // honest "load ext-imagick or ext-gd" empty list.
+        if (\extension_loaded('imagick')) {
+            $processors[] = new PdfPreviewProcessor(
+                streams: $streams,
+                maxSourceBytes: $maxSourceBytes,
+                maxSourcePixels: $maxSourcePixels,
+            );
+        }
 
         return new self($processors);
     }

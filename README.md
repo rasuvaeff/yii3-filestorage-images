@@ -26,9 +26,12 @@ integration is exercised against it.
 - **Non-image previews.** `PdfPreviewProcessor` renders the first page of a
   PDF as the preset's image — the "different processor keyed by source MIME"
   shape the processing contract was drawn around. Imagick with the
-  ghostscript delegate only; the render DPI is computed from the pinged page
-  geometry and the pixel cap, so a decompression bomb has to get past the
-  byte cap and the geometry check to reach ImageMagick. Video posters stay
+  ghostscript delegate only. The byte cap is the one guard that runs before
+  ImageMagick parses the document; the page geometry is then pinged
+  (metadata, no rasterisation), the render DPI is computed from it and the
+  pixel cap, and a page over the cap at the 72-DPI baseline is refused before
+  a pixel is allocated — the read itself selects page 0, so a hundred-page
+  PDF costs one render, not a hundred. Video posters stay
   out: no ffmpeg in the dependency graph, by the same honesty.
 - **Presets, never free-form dimensions.** Every derivative this installation
   can produce is declared in `params` under a name. `w=200&h=200` in a URL —

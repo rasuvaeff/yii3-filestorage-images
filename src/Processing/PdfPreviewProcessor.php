@@ -23,16 +23,19 @@ use Rasuvaeff\Yii3FilestorageImages\Preset;
  * ones are picked for `image/*`.
  *
  * Imagick-only on purpose: GD cannot read PDFs, and rendering one is
- * ghostscript's job anyway — `supports()` therefore answers for the delegate
- * (`Imagick::queryFormats('PDF')`), not just the extension. A runtime without
- * the delegate simply reports the combination unsupported, the same way it
- * does for AVIF.
+ * ghostscript's job anyway. `supports()` answers from the format registry
+ * (`Imagick::queryFormats('PDF')`) — a registry entry without a working
+ * ghostscript binary is possible (a stripped distro), and such a runtime
+ * learns it at generation time: `process()` fails with
+ * `ProcessingFailedException` naming the delegate, the same loud failure a
+ * broken AVIF encoder produces.
  *
- * Resolution is chosen, not guessed: the page geometry is *pinged* — metadata,
- * no rasterisation — and the render DPI is the largest (≤ 150) that keeps the
- * raster under the pixel cap. A page whose 72-DPI geometry is already over
- * the cap is refused before a single pixel is allocated; a decompression bomb
- * has to get past the byte cap and this check to reach ImageMagick.
+ * Resolution is chosen, not guessed: the page geometry is *pinged* and the
+ * render DPI is the largest (≤ 150) that keeps the raster under the pixel
+ * cap. Ordering, honestly: the byte cap is the only guard that runs before
+ * ImageMagick parses the document — the ping itself is an ImageMagick parse
+ * (metadata-only, no rasterisation), and a page whose 72-DPI geometry is
+ * already over the cap is refused before a single pixel is allocated.
  *
  * @api
  */
@@ -88,6 +91,15 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
 
         $dpi = $this->renderDpi($bytes);
 
+        // Page zero, selected at READ time: the blob API takes no page
+        // selector, and reading the whole document first ("then keep frame
+        // 0") makes a hundred-page PDF cost a hundred renders before one is
+        // kept. The spooled file with the `[0]` selector limits the
+        // ghostscript invocation to the first page.
+        $spool = tempnam(sys_get_temp_dir(), 'filestorage-pdf');
+        \assert($spool !== false);
+        file_put_contents($spool, $bytes);
+
         $image = new \Imagick();
 
         try {
@@ -95,12 +107,7 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
                 // Density before the read: ImageMagick rasterises PDFs at the
                 // resolution in effect when the document is opened.
                 $image->setResolution($dpi, $dpi);
-                $image->readImageBlob($bytes);
-
-                if ($image->getNumberImages() > 1) {
-                    $image->setIteratorIndex(0);
-                    $image = $image->getImage();
-                }
+                $image->readImage($spool . '[0]');
 
                 $sourceWidth = $image->getImageWidth();
                 $sourceHeight = $image->getImageHeight();
@@ -142,6 +149,7 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
             );
         } finally {
             $image->clear();
+            @unlink($spool);
         }
     }
 
@@ -177,7 +185,10 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
 
         $baselinePixels = $pageWidth * $pageHeight;
         if ($this->maxSourcePixels > 0 && $baselinePixels > $this->maxSourcePixels) {
-            throw new ProcessingFailedException(sprintf(
+            // Unsupported, not failed — the raster pixel guards throw the
+            // same verdict, and `filestorage:warm` counts it a skip, not a
+            // broken rendition.
+            throw new UnsupportedSourceException(sprintf(
                 'PDF page is %dx%d points — over the %d pixel cap even at the 72-DPI baseline',
                 $pageWidth,
                 $pageHeight,

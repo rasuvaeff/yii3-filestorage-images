@@ -101,9 +101,12 @@ final class CompositeImageProcessorTest
         if (\extension_loaded('gd')) {
             $expected[] = \Rasuvaeff\Yii3FilestorageImages\Processing\GdImageProcessor::class;
         }
-        // The PDF preview rides along on imagick: it answers nothing for
-        // raster sources, so the raster order above is undisturbed.
-        $expected[] = \Rasuvaeff\Yii3FilestorageImages\Processing\PdfPreviewProcessor::class;
+        // The PDF preview rides along on imagick only: it answers nothing
+        // for raster sources, so the raster order above is undisturbed — and
+        // a runtime with neither extension keeps the empty list.
+        if (\extension_loaded('imagick')) {
+            $expected[] = \Rasuvaeff\Yii3FilestorageImages\Processing\PdfPreviewProcessor::class;
+        }
 
         $composite = CompositeImageProcessor::fromAvailable(new Psr17Factory());
         $processors = (new \ReflectionProperty(CompositeImageProcessor::class, 'processors'))->getValue($composite);

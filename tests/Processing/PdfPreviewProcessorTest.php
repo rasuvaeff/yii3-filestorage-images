@@ -88,7 +88,9 @@ final class PdfPreviewProcessorTest
 
         $processor = new PdfPreviewProcessor(new Psr17Factory(), maxSourceBytes: 1_048_576, maxSourcePixels: 100_000);
 
-        Expect::exception(ProcessingFailedException::class)->withMessageContaining('pixel cap');
+        // Unsupported — the same verdict the raster guards give, so warm
+        // counts it a skip rather than a broken rendition.
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('pixel cap');
 
         $processor->process($this->stream(Pdf::page(1000, 2000)), 'application/pdf', new Preset(
             name: 'x',
