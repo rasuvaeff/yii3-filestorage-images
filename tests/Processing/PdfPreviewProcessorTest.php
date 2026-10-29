@@ -240,7 +240,7 @@ final class PdfPreviewProcessorTest
 
         try {
             $ping = new \Imagick();
-            $ping->pingImageBlob(Pdf::page(1, 1));
+            $ping->pingImageBlob(Pdf::page());
             $ping->clear();
 
             return self::$available = true;
