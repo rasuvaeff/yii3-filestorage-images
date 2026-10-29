@@ -5,7 +5,7 @@ PCOV_BOOTSTRAP := apk add --no-cache $$PHPIZE_DEPS >/dev/null && pecl install pc
 # without them. This bootstrap compiles both so `make test-images` runs the
 # full suite locally, the way CI does.
 IMAGES_BOOTSTRAP := apk add --no-cache libpng-dev libjpeg-turbo-dev libwebp-dev freetype-dev libavif-dev \
-	imagemagick imagemagick-dev $$PHPIZE_DEPS >/dev/null 2>&1 \
+	imagemagick imagemagick-dev ghostscript $$PHPIZE_DEPS >/dev/null 2>&1 \
 	&& docker-php-ext-configure gd --with-jpeg --with-webp --with-freetype --with-avif >/dev/null 2>&1 \
 	&& docker-php-ext-install gd >/dev/null 2>&1 \
 	&& pecl install imagick >/dev/null 2>&1 && docker-php-ext-enable imagick >/dev/null 2>&1

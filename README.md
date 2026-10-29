@@ -23,6 +23,13 @@ integration is exercised against it.
 
 ## What it does
 
+- **Non-image previews.** `PdfPreviewProcessor` renders the first page of a
+  PDF as the preset's image — the "different processor keyed by source MIME"
+  shape the processing contract was drawn around. Imagick with the
+  ghostscript delegate only; the render DPI is computed from the pinged page
+  geometry and the pixel cap, so a decompression bomb has to get past the
+  byte cap and the geometry check to reach ImageMagick. Video posters stay
+  out: no ffmpeg in the dependency graph, by the same honesty.
 - **Presets, never free-form dimensions.** Every derivative this installation
   can produce is declared in `params` under a name. `w=200&h=200` in a URL —
   even signed — turns one uploaded image into an unbounded set of addressable

@@ -59,6 +59,15 @@ final readonly class CompositeImageProcessor implements ImageProcessorInterface
                 maxSourcePixels: $maxSourcePixels,
             );
         }
+        // Keyed by source MIME, not by extension: the PDF preview joins the
+        // line-up whenever the imagick delegate for it exists, and supports()
+        // answers nothing for raster sources, so the order above is
+        // undisturbed.
+        $processors[] = new PdfPreviewProcessor(
+            streams: $streams,
+            maxSourceBytes: $maxSourceBytes,
+            maxSourcePixels: $maxSourcePixels,
+        );
 
         return new self($processors);
     }
