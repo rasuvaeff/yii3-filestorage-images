@@ -104,6 +104,14 @@ final class PdfPreviewProcessorTest
         if (!$this->available()) {
             throw new SkipTest('the imagick PDF delegate is not available');
         }
+        if (getenv('INFECTION')) {
+            // A ghostscript fatal abort sends SIGTERM to its process group,
+            // which under Infection's initial run takes the whole Testo
+            // suite down with exit 143. The guard these tests prove runs in
+            // every other context; Infection's initial pass skips the crash.
+            throw new SkipTest('a crashing gs aborts the Infection process group');
+        }
+
 
         // Ghostscript refuses a zero MediaBox side itself (as a geometry
         // error); whatever of the two fires, it is a processing error.
@@ -204,6 +212,14 @@ final class PdfPreviewProcessorTest
         if (!$this->available()) {
             throw new SkipTest('the imagick PDF delegate is not available');
         }
+        if (getenv('INFECTION')) {
+            // A ghostscript fatal abort sends SIGTERM to its process group,
+            // which under Infection's initial run takes the whole Testo
+            // suite down with exit 143. The guard these tests prove runs in
+            // every other context; Infection's initial pass skips the crash.
+            throw new SkipTest('a crashing gs aborts the Infection process group');
+        }
+
 
         Expect::exception(ProcessingFailedException::class);
 
