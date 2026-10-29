@@ -27,7 +27,7 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
-        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+        if (getenv('SKIP_PDF_RENDERS')) {
             // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
             // suite to a SIGTERM the first time a ghostscript render runs
             // under Infection; Alpine/ImageMagick7 — the local `make
@@ -77,7 +77,7 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
-        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+        if (getenv('SKIP_PDF_RENDERS')) {
             // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
             // suite to a SIGTERM the first time a ghostscript render runs
             // under Infection; Alpine/ImageMagick7 — the local `make
@@ -104,7 +104,7 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
-        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+        if (getenv('SKIP_PDF_RENDERS')) {
             // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
             // suite to a SIGTERM the first time a ghostscript render runs
             // under Infection; Alpine/ImageMagick7 — the local `make
@@ -132,7 +132,7 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
-        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+        if (getenv('SKIP_PDF_RENDERS')) {
             // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
             // suite to a SIGTERM the first time a ghostscript render runs
             // under Infection; Alpine/ImageMagick7 — the local `make
@@ -167,7 +167,7 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
-        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+        if (getenv('SKIP_PDF_RENDERS')) {
             // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
             // suite to a SIGTERM the first time a ghostscript render runs
             // under Infection; Alpine/ImageMagick7 — the local `make
@@ -196,7 +196,7 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
-        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+        if (getenv('SKIP_PDF_RENDERS')) {
             // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
             // suite to a SIGTERM the first time a ghostscript render runs
             // under Infection; Alpine/ImageMagick7 — the local `make
@@ -223,7 +223,7 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
-        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+        if (getenv('SKIP_PDF_RENDERS')) {
             // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
             // suite to a SIGTERM the first time a ghostscript render runs
             // under Infection; Alpine/ImageMagick7 — the local `make
@@ -252,7 +252,7 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
-        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+        if (getenv('SKIP_PDF_RENDERS')) {
             // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
             // suite to a SIGTERM the first time a ghostscript render runs
             // under Infection; Alpine/ImageMagick7 — the local `make
@@ -285,7 +285,7 @@ final class PdfPreviewProcessorTest
             throw new SkipTest('the imagick PDF delegate is not available');
         }
 
-        if (getenv('INFECTION') && getenv('SKIP_PDF_RENDERS')) {
+        if (getenv('SKIP_PDF_RENDERS')) {
             // CI's mutation job (Ubuntu ImageMagick6) loses the whole Testo
             // suite to a SIGTERM the first time a ghostscript render runs
             // under Infection; Alpine/ImageMagick7 — the local `make
