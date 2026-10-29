@@ -197,6 +197,13 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --no-progress --prefer-dist
 
+      # The PDF preview tests run against real renders: imagick (from
+      # setup-php) lists the PDF delegate but needs the ghostscript binary
+      # to execute it. Without this the probe skips those tests and the
+      # mutation gate sees a different package than the one shipped.
+      - name: Install ghostscript (imagick PDF delegate)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ghostscript
+
       - name: Restore property regression corpus
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -217,6 +224,14 @@ jobs:
           key: property-db-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Mutation testing
+        # The render tests above prove the PDF preview on this runner; under
+        # Infection the first ghostscript render takes the whole Testo suite
+        # down with a SIGTERM (Ubuntu's ImageMagick6 delegate; Alpine/IM7 in
+        # the local `make mutation` gate runs everything). The flag skips
+        # only the renders here - `refusesOtherSources` and every other test
+        # still run mutated.
+        env:
+          SKIP_PDF_RENDERS: 1
         run: composer mutation
 
   compatibility:

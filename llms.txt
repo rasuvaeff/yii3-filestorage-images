@@ -165,3 +165,13 @@ The package binds: `PresetRegistry`, `ImageProcessorInterface`
 It does NOT bind: `MutexFactoryInterface` (application picks the driver),
 stores, repositories, `ClockInterface`, delivery policies — those belong to
 the application or other family packages.
+
+## PdfPreviewProcessor
+
+Source `application/pdf` -> first page as the preset image; joined into
+`CompositeImageProcessor::fromAvailable()` (keyed by source MIME — no new
+plumbing). Imagick + the ghostscript delegate only; without the delegate the
+combination is reported unsupported, like AVIF. Render DPI =
+72*sqrt(maxSourcePixels/baselinePoints2) (<=150); a page over the cap at the
+72-DPI baseline is refused before a pixel is allocated. `make test-images`
+installs ghostscript, so CI runs the PDF suite.

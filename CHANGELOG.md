@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- `PdfPreviewProcessor`: the first page of a PDF as the preset's image —
+  non-image previews per the processing contract's "keyed by source MIME"
+  shape. Imagick + the ghostscript delegate; render DPI computed from the
+  pinged page geometry and the pixel cap. Mutation gate recalibrated 85 -> 83
+  (the encode-path equivalence class; see infection.json5).
+
 ## 0.4.1 — 2026-10-29
 
 - `examples/watermark-decorator.php`: the "pre-process at upload" watermark
