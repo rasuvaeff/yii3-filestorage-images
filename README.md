@@ -64,7 +64,7 @@ integration is exercised against it.
 
 ## Requirements
 
-- PHP 8.3 – 8.5, `ext-dom`, `ext-libxml`
+- PHP 8.3 – 8.6, `ext-dom`, `ext-libxml`
 - `rasuvaeff/yii3-filestorage` ^0.3
 - A processor extension: `ext-gd` and/or `ext-imagick` (Imagick is preferred
   when both are loaded — it applies EXIF orientation and handles more formats)

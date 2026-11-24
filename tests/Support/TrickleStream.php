@@ -39,7 +39,7 @@ final class TrickleStream implements StreamInterface
     }
 
     #[Override]
-    public function getSize(): ?int
+    public function getSize(): int
     {
         return strlen($this->body);
     }
