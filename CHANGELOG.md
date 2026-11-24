@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+- Enh #15: Add PHP 8.6 support. The constraint is now `8.3 - 8.6`, and
+  `rasuvaeff/yii3-filestorage` is accepted on the `^0.8` line (released with
+  `8.3 - 8.6`). Dev-only: `vimeo/psalm` `^6.16` -> `^7.0`.
+
 ## 0.5.0 — 2026-10-29
 
 - `PdfPreviewProcessor`: the first page of a PDF as the preset's image —

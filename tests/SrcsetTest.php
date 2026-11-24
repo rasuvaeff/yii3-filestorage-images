@@ -42,7 +42,7 @@ final class SrcsetTest
         $srcset = Srcset::for($this->derivatives(new SignedProxyUrlGenerator()), $this->presets(), Fixtures::file());
 
         Assert::string($srcset)->contains('wide/1767229200 800w');
-        Assert::false((bool) str_contains((string) $srcset, 'poster'));
+        Assert::false(str_contains((string) $srcset, 'poster'));
     }
 
     /** A chosen subset is an intersection with the whitelist, in the given order. */

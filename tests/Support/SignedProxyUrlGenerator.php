@@ -23,7 +23,7 @@ final class SignedProxyUrlGenerator implements ProxyUrlGeneratorInterface
     public ?DateTimeImmutable $lastExpiresAt = null;
 
     #[Override]
-    public function url(File $file, DateTimeImmutable $expiresAt): ?string
+    public function url(File $file, DateTimeImmutable $expiresAt): string
     {
         $this->lastExpiresAt = $expiresAt;
 
@@ -31,7 +31,7 @@ final class SignedProxyUrlGenerator implements ProxyUrlGeneratorInterface
     }
 
     #[Override]
-    public function variantUrl(File $file, string $variant, DateTimeImmutable $expiresAt): ?string
+    public function variantUrl(File $file, string $variant, DateTimeImmutable $expiresAt): string
     {
         $this->lastVariant = $variant;
         $this->lastExpiresAt = $expiresAt;

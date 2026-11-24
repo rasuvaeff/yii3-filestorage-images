@@ -175,7 +175,7 @@ final class ConfigWiringTest
     {
         return [
             ClockInterface::class => static fn(): ClockInterface => new StaticClock(Fixtures::now()),
-            StreamFactoryInterface::class => static fn(): StreamFactoryInterface => Fixtures::factory(),
+            StreamFactoryInterface::class => Fixtures::factory(...),
             MutexFactoryInterface::class => static fn(): MutexFactoryInterface
                 => new PredictableMutexFactory(),
             StoreRegistry::class => static fn(): StoreRegistry

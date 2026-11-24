@@ -159,8 +159,6 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
      * largest (up to 150) whose raster stays under the pixel cap.
      *
      * @param non-empty-string $bytes
-     *
-     * @return float
      */
     private function renderDpi(string $bytes): float
     {

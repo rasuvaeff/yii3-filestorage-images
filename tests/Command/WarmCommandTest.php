@@ -51,7 +51,7 @@ final class WarmCommandTest
     {
         $store = $this->storeWith('file-1');
         $tester = $this->tester($store, files: [Fixtures::file(id: 'file-1')], presets: new PresetRegistry([
-            new Preset(name: 'thumb', version: 2, format: Format::Webp, width: 100),
+            new Preset(name: 'thumb', format: Format::Webp, width: 100, version: 2),
         ]));
 
         Assert::same($tester->execute([]), 0);
@@ -62,7 +62,7 @@ final class WarmCommandTest
         // Version 1 — the only one — is not flagged: there is nothing older.
         $fresh = $this->tester($this->storeWith('file-1'), files: [Fixtures::file(id: 'file-1')]);
         $fresh->execute([]);
-        Assert::false((bool) str_contains($this->display($fresh), 'gc --orphans is the cleaner'));
+        Assert::false(str_contains($this->display($fresh), 'gc --orphans is the cleaner'));
     }
 
     public function warmingTwiceGeneratesNothingNew(): void

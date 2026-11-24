@@ -146,8 +146,8 @@ final class ImageMetadataStorageTest
                 originalName: 'a.png',
                 size: 1,
                 createdAt: Fixtures::now(),
-                updatedAt: Fixtures::now(),
                 metadata: $call->args[4],
+                updatedAt: Fixtures::now(),
             ),
         );
 
