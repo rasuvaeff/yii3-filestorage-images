@@ -37,10 +37,15 @@ final class WarmCommand extends Command
 {
     private const int PAGE = 500;
 
+    /**
+     * @param int<0, max> $lockTimeoutSeconds How long to wait for a rendition
+     *        another process is generating — longer than a request waits.
+     */
     public function __construct(
         private readonly Derivatives $derivatives,
         private readonly PresetRegistry $presets,
         private readonly MaintenanceRepositoryInterface $repository,
+        private readonly int $lockTimeoutSeconds = 60,
     ) {
         parent::__construct();
     }
@@ -87,43 +92,49 @@ final class WarmCommand extends Command
         $failed = 0;
         $last = null;
 
-        while ($seen < $limit) {
-            $page = iterator_to_array(
-                $this->repository->files($after, max(1, min(self::PAGE, $limit - $seen))),
-                preserve_keys: false,
-            );
-            if ($page === []) {
-                break;
-            }
+        try {
+            while ($seen < $limit) {
+                $page = iterator_to_array(
+                    $this->repository->files($after, max(1, min(self::PAGE, $limit - $seen))),
+                    preserve_keys: false,
+                );
+                if ($page === []) {
+                    break;
+                }
 
-            foreach ($page as $file) {
-                $seen++;
-                $last = $file->id;
-                $after = $file->id;
+                foreach ($page as $file) {
+                    $seen++;
+                    $last = $file->id;
+                    $after = $file->id;
 
-                foreach ($presetNames as $presetName) {
-                    try {
-                        $this->derivatives->ensure($file, $presetName) ? $generated++ : $existing++;
-                    } catch (UnsupportedSourceException) {
-                        // Not an image, or not one this installation
-                        // processes. Expected in any mixed bucket — a skip,
-                        // not a failure.
-                        $skipped++;
-                    } catch (FilestorageException $exception) {
-                        $failed++;
-                        $io->text(sprintf(
-                            '  failed: %s %s: %s',
-                            $file->id,
-                            $presetName,
-                            $exception->getMessage(),
-                        ));
+                    foreach ($presetNames as $presetName) {
+                        try {
+                            $this->derivatives->ensure($file, $presetName, $this->lockTimeoutSeconds) ? $generated++ : $existing++;
+                        } catch (UnsupportedSourceException) {
+                            // Not an image, or not one this installation
+                            // processes. Expected in any mixed bucket — a skip,
+                            // not a failure.
+                            $skipped++;
+                        } catch (FilestorageException|\Exception $exception) {
+                            // Anything short of an engine error is one
+                            // rendition's failure: a layout's InvalidArgument-
+                            // Exception, a mutex driver's RuntimeException.
+                            $failed++;
+                            $io->text(sprintf(
+                                '  failed: %s %s: %s',
+                                $file->id,
+                                $presetName,
+                                $exception->getMessage(),
+                            ));
+                        }
                     }
                 }
             }
-        }
-
-        if ($last !== null) {
-            $io->text(sprintf('Last id: %s', $last));
+        } finally {
+            // Printed even when the run dies: it is what `--after` resumes from.
+            if ($last !== null) {
+                $io->text(sprintf('Last id: %s', $last));
+            }
         }
 
         $io->{$failed === 0 ? 'success' : 'warning'}(sprintf(
