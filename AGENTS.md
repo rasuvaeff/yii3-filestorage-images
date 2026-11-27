@@ -71,9 +71,11 @@ does. Run `make test-images` whenever a processor changes.
 - `Imagick::autoOrientImage()` does not exist in every imagick build —
   orientation is applied manually via `getImageOrientation()` +
   `flopImage()`/`rotateImage()`. Do not "simplify" it back.
-- The generation lock name is `filestorage-images:` + sha256 of
-  `BlobId->key()` + descriptor filename. Keyed by *physical* identity on
-  purpose: deduplicated logical rows must share the lock.
+- The generation lock name is `filestorage-images:` + sha256 of the store name
+  + the rendition path from `layout()->derivativePath($file, $descriptor)`.
+  Keyed by the *physical* rendition on purpose: deduplicated logical rows, and
+  flat-layout rows whose originals differ only in extension, write one object
+  and must share one lock. Never key it by `BlobId` + descriptor filename.
 - `ThrowWithPreviousExceptionRector` is skipped in `rector.php`: it adds
   `code: $e->getCode()` (an int|string psalm rejects and a behaviour change).
   Same skip as the `*-db` packages.
