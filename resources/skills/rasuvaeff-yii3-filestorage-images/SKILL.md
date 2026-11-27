@@ -32,8 +32,10 @@ capability. Namespace `Rasuvaeff\Yii3FilestorageImages\`. Full API reference:
    `maxSourcePixels` is checked against the *header* before the decoder
    allocates. A 200-byte PNG may claim 100000×100000 pixels.
 
-4. **Blob-scoped purity.** Under dedup, renditions live in the shared blob
-   directory and the generation lock is keyed by `BlobId` + descriptor. A
+4. **Blob-scoped purity.** Under dedup, renditions live beside the shared
+   stored object, where the store's layout puts them (`DirectoryLayout`:
+   `<key>/thumb-v1.webp`; `FlatSiblingLayout`: `<dir>/<sha>-thumb-v1.webp`),
+   and the generation lock is keyed by the store name + that layout path. A
    derivative must be a pure function of original bytes + preset version —
    no per-owner watermarks or redaction through this package.
 

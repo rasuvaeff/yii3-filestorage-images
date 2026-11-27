@@ -23,7 +23,9 @@ Namespace `Rasuvaeff\Yii3FilestorageImages`.
    physical name (changing options without bumping `version` serves stale
    objects), and every decode is preceded by the byte + header-pixel guards.
    A rendition must stay a pure function of original bytes + preset version:
-   under dedup it lives in the shared blob directory.
+   under dedup it lives beside the shared stored object. Never build a
+   derivative path here: the store's layout (`layout()->derivativePath()`)
+   names it, and the generation lock is keyed by that path.
 4. **Preserve the public contract.** Update README + tests with any API change.
 
 ## Commands
