@@ -80,18 +80,21 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
         // decompression bomb the guard exists for.
         SourceGuard::dimensions($bytes, $this->maxSourcePixels);
 
+        // The coder comes from the detected media type, never from
+        // ImageMagick's own sniffing of the bytes, and `[0]` selects the
+        // first frame at read time: a derivative is a still, and decoding
+        // every frame of an animation before keeping one is what let 30
+        // frames of 1 MP through a 2 MP cap (review 1.0 A4). The selector
+        // only works through the filename — `readImageBlob()`'s second
+        // argument ignores it.
+        $selector = self::FORMATS[$sourceMediaType] . ':source[0]';
+        [$frameWidth, $frameHeight] = $this->firstFrame($bytes, $selector);
+
         $image = new Imagick();
 
         try {
             try {
-                $image->readImageBlob($bytes);
-
-                // One frame only: a derivative is a still rendition, and the
-                // first frame is what every player shows as the poster anyway.
-                if ($image->getNumberImages() > 1) {
-                    $image->setIteratorIndex(0);
-                    $image = $image->getImage();
-                }
+                $this->read($image, $bytes, $selector, $frameWidth, $frameHeight);
 
                 // Orient first, then measure: rotation swaps width and height,
                 // and the geometry has to see the image the viewer will.
@@ -139,6 +142,100 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
             );
         } finally {
             $image->clear();
+        }
+    }
+
+    /**
+     * The first frame's own size, from a header-only ping, checked against the
+     * cap. `getimagesize()` reports a GIF's logical screen, while the decoder
+     * allocates each frame at its descriptor size: a 1x1 screen over a
+     * 4000x4000 frame passed the header guard. Both the frame and the canvas
+     * it sits on are checked.
+     *
+     * @return array{positive-int, positive-int}
+     *
+     * @throws ProcessingFailedException
+     * @throws UnsupportedSourceException
+     */
+    private function firstFrame(string $bytes, string $selector): array
+    {
+        $ping = new Imagick();
+
+        try {
+            $ping->setFilename($selector);
+            $ping->pingImageBlob($bytes);
+            $width = $ping->getImageWidth();
+            $height = $ping->getImageHeight();
+            $page = $ping->getImagePage();
+        } catch (ImagickException $exception) {
+            throw new ProcessingFailedException(
+                "Imagick could not process the image: {$exception->getMessage()}",
+                previous: $exception,
+            );
+        } finally {
+            $ping->clear();
+        }
+
+        if ($width < 1 || $height < 1) {
+            throw new ProcessingFailedException('Imagick reported empty source dimensions');
+        }
+
+        foreach ([[$width, $height, 'frame'], [$page['width'], $page['height'], 'canvas']] as [$w, $h, $what]) {
+            if ($this->maxSourcePixels > 0 && $w * $h > $this->maxSourcePixels) {
+                throw new UnsupportedSourceException(
+                    "Source {$what} is {$w}x{$h} = " . ($w * $h)
+                    . " pixels, over the {$this->maxSourcePixels}-pixel processing cap",
+                );
+            }
+        }
+
+        return [$width, $height];
+    }
+
+    /**
+     * Reads the one frame with ImageMagick's own limits narrowed to what the
+     * ping declared: no wider or taller than that frame, no second image in
+     * the list. Defence in depth for a coder whose read disagrees with its
+     * ping. The limits are process-wide state, so they are only ever lowered,
+     * and put back as soon as the read returns — the application's own
+     * Imagick use, and the next file, must not inherit them. (The area and
+     * memory limits are not used: past them ImageMagick 7 moves the pixel
+     * cache to disk instead of refusing.)
+     *
+     * @param positive-int $width
+     * @param positive-int $height
+     *
+     * @throws ImagickException
+     */
+    private function read(Imagick $image, string $bytes, string $selector, int $width, int $height): void
+    {
+        $narrowed = [
+            Imagick::RESOURCETYPE_WIDTH => $width,
+            Imagick::RESOURCETYPE_HEIGHT => $height,
+            // Two, not one: ImageMagick refuses a list whose length reaches
+            // the limit, so one would refuse the single frame itself.
+            Imagick::RESOURCETYPE_LISTLENGTH => 2,
+        ];
+        $previous = [];
+        foreach ($narrowed as $type => $limit) {
+            $current = Imagick::getResourceLimit($type);
+            $previous[$type] = $current;
+            if ($limit < $current) {
+                Imagick::setResourceLimit($type, $limit);
+            }
+        }
+
+        try {
+            $image->setFilename($selector);
+            $image->readImageBlob($bytes);
+            // The coder prefix stays on the handle and would win over
+            // setImageFormat() at encode time: every rendition came out in
+            // the source's format.
+            $image->setFilename('');
+        } finally {
+            foreach ($previous as $type => $limit) {
+                Imagick::setResourceLimit($type, $limit >= (float) \PHP_INT_MAX ? \PHP_INT_MAX : (int) $limit);
+            }
         }
     }
 

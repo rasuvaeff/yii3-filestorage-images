@@ -23,6 +23,26 @@ class Imagick
     public const int ORIENTATION_RIGHTBOTTOM = 7;
     public const int ORIENTATION_LEFTBOTTOM = 8;
 
+    public const int RESOURCETYPE_HEIGHT = 4;
+    public const int RESOURCETYPE_WIDTH = 10;
+    public const int RESOURCETYPE_LISTLENGTH = 11;
+
+    /**
+     * ImageMagick reports "unlimited" as a float past PHP_INT_MAX.
+     */
+    public static function getResourceLimit(int $type): int|float {}
+
+    public static function setResourceLimit(int $type, int $limit): bool {}
+
+    public function setFilename(string $filename): bool {}
+
+    public function pingImageBlob(string $image): bool {}
+
+    /**
+     * @return array{width: int, height: int, x: int, y: int}
+     */
+    public function getImagePage(): array {}
+
     /**
      * @return list<string>
      */

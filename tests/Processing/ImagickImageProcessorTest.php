@@ -248,6 +248,138 @@ final class ImagickImageProcessorTest
         );
     }
 
+    /**
+     * Review 1.0 A4, probe `gif.php` case 2. `getimagesize()` reads a GIF's
+     * logical screen; ImageMagick decodes each frame at its own descriptor
+     * size. Screen patched to 1x1, frame 1500x1500: the header guard saw one
+     * pixel, the decoder allocated 2.25 MP past a 1 MP cap. GD refuses such a
+     * file; Imagick decoded it.
+     */
+    public function aFrameLargerThanItsLogicalScreenIsRefusedBeforeDecoding(): void
+    {
+        $this->requireExtension();
+
+        $frame = new \Imagick();
+        $frame->newImage(1500, 1500, new \ImagickPixel('green'), 'GIF');
+        $bytes = $frame->getImageBlob();
+        // Logical screen width/height, little-endian, right after "GIF89a".
+        $bytes = substr_replace($bytes, "\x01\x00\x01\x00", 6, 4);
+        Assert::same(\array_slice((array) getimagesizefromstring($bytes), 0, 2), [1, 1]);
+
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('pixel processing cap');
+
+        (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: 1_000_000))->process(
+            (new Psr17Factory())->createStream($bytes),
+            'image/gif',
+            new Preset(name: 'thumb', format: Format::Png, width: 64),
+        );
+    }
+
+    /**
+     * Review 1.0 A4, probe `gif.php` case 1: every frame was decoded before
+     * the first was kept, so 30 frames of 1 MP cost 30 MP under a 2 MP cap.
+     * Only frame 0 is read now. Observable through ImageMagick's own
+     * list-length limit — the one a hardened `policy.xml` sets: a decoder
+     * allowed a single image still processes the animation, which a full
+     * decode cannot.
+     */
+    public function anAnimatedGifDecodesOnlyItsFirstFrame(): void
+    {
+        $this->requireExtension();
+
+        $animation = new \Imagick();
+        for ($i = 0; $i < 30; $i++) {
+            $animation->newImage(100, 100, new \ImagickPixel($i % 2 === 0 ? 'red' : 'blue'), 'GIF');
+        }
+        $bytes = $animation->getImagesBlob();
+
+        $previous = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH);
+        \Imagick::setResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH, 2);
+
+        try {
+            $processed = (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: 2_000_000))->process(
+                (new Psr17Factory())->createStream($bytes),
+                'image/gif',
+                new Preset(name: 'thumb', format: Format::Png, width: 50),
+            );
+        } finally {
+            \Imagick::setResourceLimit(
+                \Imagick::RESOURCETYPE_LISTLENGTH,
+                $previous >= (float) \PHP_INT_MAX ? \PHP_INT_MAX : (int) $previous,
+            );
+        }
+
+        Assert::same([$processed->width, $processed->height], [50, 50]);
+    }
+
+    /**
+     * The coder is the detected media type's, never ImageMagick's own guess
+     * from the bytes: a file whose bytes say PNG under a GIF row is refused
+     * rather than handed to whichever coder its magic number selects — the
+     * route by which MVG, MSL and friends reach a decoder.
+     */
+    public function bytesOfAnotherFormatThanTheMediaTypeAreRefused(): void
+    {
+        $this->requireExtension();
+
+        Expect::exception(ProcessingFailedException::class);
+
+        (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource(8, 8),
+            'image/gif',
+            new Preset(name: 'thumb', format: Format::Png, width: 4),
+        );
+    }
+
+    /**
+     * The decoder limits are process-wide ImageMagick state. They are
+     * narrowed for the read and put back, so neither the application's own
+     * Imagick use nor the next request inherits this file's frame size.
+     */
+    public function theProcessWideDecoderLimitsArePutBack(): void
+    {
+        $this->requireExtension();
+
+        $before = [
+            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH),
+            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_HEIGHT),
+            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH),
+        ];
+
+        (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource(40, 20),
+            'image/png',
+            new Preset(name: 'thumb', format: Format::Png, width: 10),
+        );
+
+        Assert::same([
+            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH),
+            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_HEIGHT),
+            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH),
+        ], $before);
+    }
+
+    /**
+     * A failed read puts them back too.
+     */
+    public function theDecoderLimitsArePutBackAfterAFailedRead(): void
+    {
+        $this->requireExtension();
+
+        $before = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH);
+
+        try {
+            (new ImagickImageProcessor(new Psr17Factory()))->process(
+                (new Psr17Factory())->createStream(Png::header(width: 4, height: 4) . 'garbage'),
+                'image/png',
+                new Preset(name: 'thumb', format: Format::Png, width: 2),
+            );
+        } catch (ProcessingFailedException) {
+        }
+
+        Assert::same(\Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH), $before);
+    }
+
     public function failsOnBytesThatDoNotDecode(): void
     {
         $this->requireExtension();
