@@ -31,7 +31,11 @@ integration is exercised against it.
   (metadata, no rasterisation), the render DPI is computed from it and the
   pixel cap, and a page over the cap at the 72-DPI baseline is refused before
   a pixel is allocated — the read itself selects page 0, so a hundred-page
-  PDF costs one render, not a hundred. Video posters stay
+  PDF costs one render, not a hundred. ImageMagick takes the page box from a
+  scan of the whole file, so the geometry is the *largest* page box in the
+  document: an upper bound (the render only comes out smaller), and one
+  oversized page refuses the preview. A `policy.xml` that forbids the PDF
+  coder (Debian's default) surfaces as `UnsupportedSourceException`. Video posters stay
   out: no ffmpeg in the dependency graph, by the same honesty.
 - **Presets, never free-form dimensions.** Every derivative this installation
   can produce is declared in `params` under a name. `w=200&h=200` in a URL —
@@ -71,10 +75,13 @@ integration is exercised against it.
 ## Requirements
 
 - PHP 8.3 – 8.6, `ext-dom`, `ext-libxml`
-- `rasuvaeff/yii3-filestorage` ^0.8.2
+- `rasuvaeff/yii3-filestorage` ^0.10
 - A processor extension: `ext-gd` and/or `ext-imagick` (Imagick is preferred
   when both are loaded — it applies EXIF orientation and handles more formats)
 - A `yiisoft/mutex` driver for the generation lock (e.g. `yiisoft/mutex-file`)
+- Optional: a PSR-16 cache (`Psr\SimpleCache\CacheInterface`, e.g.
+  `yiisoft/cache`) — when the application binds one, failed generations are
+  remembered (see below)
 
 ## Installation
 
@@ -97,10 +104,12 @@ return [
 ];
 ```
 
-The store comes from the storage family (`-flysystem`, or a filesystem store
-bound by the application) and must implement the core
-`DerivativeAwareStoreInterface` — both shipped filesystem stores and
-`FlysystemStore` do.
+The store must implement the core `DerivativeAwareStoreInterface`. Core's
+filesystem stores (`FileSystemStore`, `PublicFileSystemStore`) do;
+**`FlysystemStore` (`-flysystem`, S3 and friends) does not** — on such a store
+every rendition fails with `DerivativeGenerationException`, which
+`yii3-filestorage-web` answers with 404. Keep image groups on a filesystem
+store, or bind a store of your own that implements the interface.
 
 ## Usage
 
@@ -139,11 +148,12 @@ final readonly class AvatarPresenter
 
     public function thumbUrl(File $file): ?string
     {
-        // Generates lazily if missing, then: a permanent public URL when the
-        // group's delivery policy allows direct public delivery, otherwise a
-        // store-native expiring URL, otherwise the application's signed proxy
-        // route when yii3-filestorage-web is installed. Null only when
-        // neither exists — serve the stream yourself in that case.
+        // A permanent public URL when the group's delivery policy allows
+        // direct public delivery, otherwise a store-native expiring URL (both
+        // generate the rendition first), otherwise the application's signed
+        // proxy route when yii3-filestorage-web is installed — minted without
+        // generating: the proxy generates on its first request. Null only
+        // when neither exists — serve the stream yourself in that case.
         return $this->derivatives->urlFor($file, 'thumb');
     }
 }
@@ -151,9 +161,9 @@ final readonly class AvatarPresenter
 
 | Method | What it does |
 |---|---|
-| `ensure(File $file, string $preset): bool` | Guarantees the rendition exists; generates under the stampede lock. Returns `true` when this call generated it |
+| `ensure(File $file, string $preset, ?int $lockTimeoutSeconds = null): bool` | Guarantees the rendition exists; generates under the stampede lock (waiting `lockTimeout`, or the given seconds). Returns `true` when this call generated it |
 | `stream(File $file, string $preset): ?StreamInterface` | The rendition's bytes, generating first if needed |
-| `urlFor(File $file, string $preset, ?DateTimeImmutable $expiresAt = null): ?string` | Policy-gated URL: direct public → store-native temporary → signed proxy (`-web`) → `null` |
+| `urlFor(File $file, string $preset, ?DateTimeImmutable $expiresAt = null): ?string` | Policy-gated URL: direct public → store-native temporary → signed proxy (`-web`) → `null`. Generates only for a store URL; still refuses what can never be generated (unsupported source, over the byte cap, a remembered failure) |
 | `exists(File $file, string $preset): bool` | Pure probe, never generates |
 | `descriptor(string $preset): DerivativeDescriptor` | The physical identity (`thumb-v1.webp`) a store addresses the rendition by |
 
@@ -163,10 +173,14 @@ carries it by construction, and the "rendition = pure function of bytes +
 preset version" invariant stays intact.
 
 `Srcset::for($derivatives, $presets, $file)` turns the whitelist into an
-`srcset` attribute value — `url 200w, url 800w` — from the presets' widths
-(height-only presets have no descriptor and are skipped); it answers null
-when nothing yields a URL, because an `srcset` with nothing in it is no
-attribute at all. `filestorage:warm` now ends with a note for every preset
+`srcset` attribute value — `url 200w, url 800w`. The width descriptor is the
+rendition's real width when the row carries `width`/`height` metadata
+(`ImageMetadataStorage`) — a `contain` preset that does not upscale renders a
+300 px source at 300, not at the preset's 800 — and the preset's width
+otherwise; two candidates with one width keep the first. Height-only presets
+have no descriptor and are skipped, a preset that cannot be produced for the
+file is left out, and the answer is null when nothing yields a URL, because an
+`srcset` with nothing in it is no attribute at all. `filestorage:warm` now ends with a note for every preset
 above version 1: older renditions remain valid and become orphans —
 `filestorage:gc --orphans` is the cleaner.
 
@@ -174,8 +188,7 @@ The facade implements core's `DerivativeResolverInterface` — that contract is
 what `yii3-filestorage-web`'s download action consumes to serve variant
 tokens, so installing both packages is the whole wiring: `urlFor()` starts
 returning signed proxy URLs for a private filesystem store, and those URLs
-resolve (`yii3-filestorage-web` 0.5.2+ — earlier releases require an older
-core). `UnknownPresetException` extends core's
+resolve (`yii3-filestorage-web` 0.7+ on core ^0.10). `UnknownPresetException` extends core's
 `UnresolvableVariantException`, the "map it to 404" signal.
 
 Failure vocabulary: `UnknownPresetException` (not in the whitelist — map it to
@@ -183,11 +196,30 @@ Failure vocabulary: `UnknownPresetException` (not in the whitelist — map it to
 combination — a PDF in a raster pipeline, a source over a guard),
 `ProcessingFailedException` (the bytes do not decode),
 `DerivativeGenerationException` (store lacks the capability, original bytes
-missing, lock timeout). A file whose path does not fit its store's layout (a
+missing, lock timeout, output over the preset's `maxBytes` once remembered).
+A file whose path does not fit its store's layout (a
 `FlatSiblingLayout` store holding `photo-1.jpg`) surfaces core's
-`InvalidArgumentException` from the layout: the store is misconfigured, not the
-request. Malformed preset config throws
+`InvalidArgumentException` from the layout (or a `StoreException` from the
+store): the store is misconfigured, not the request. Malformed preset config throws
 `InvalidPresetException` at container build time, naming the offending key.
+
+### Failed generations are remembered
+
+A source that always fails — it does not decode, it is over a guard, its
+output is over the preset's `maxBytes` — used to be read and decoded again on
+every request, each one queueing behind the generation lock. When the
+application binds a PSR-16 `CacheInterface`, the failure is remembered for
+`failureTtl` (default `PT5M`): later requests answer from the cache without the
+lock, the read or the processor, and a request that waited for the lock sees
+the winner's failure instead of decoding the same bytes again. The entry is
+keyed by the physical rendition and the original's version (`updatedAt`,
+content hash), so a re-upload is tried at once. A missing original or a store
+error is never remembered — it may be gone a second later. Without a bound
+cache nothing is remembered.
+
+A request waits `lockTimeout` (default 10 s) for another one's generation of
+the same rendition — it holds a worker meanwhile; `filestorage:warm` waits
+`warmLockTimeout` (default 60 s).
 
 ### Warm ahead of traffic
 
@@ -197,7 +229,10 @@ filestorage:warm --preset=thumb --limit=1000 --after=<file-id>
 ```
 
 Additive and idempotent — existing renditions are counted, not regenerated.
-Unsupported files (non-images in a mixed bucket) are skips, not failures.
+Unsupported files (non-images in a mixed bucket) are skips, not failures; any
+other exception of one rendition — a layout's, a mutex driver's — is one
+failure and the run goes on. `Last id:` is printed even when the run dies, so
+`--after` can resume.
 Requires the backend to implement the core `MaintenanceRepositoryInterface`
 (the `-db` repository does).
 
@@ -234,13 +269,20 @@ polyglots at the cost of not preserving the uploaded bytes.
 | | GD | Imagick |
 |---|---|---|
 | EXIF auto-orientation | no — a sideways phone photo stays sideways | yes, before geometry |
-| Animated GIF | flattened to the first frame | first frame |
+| Animated GIF | flattened to the first frame | first frame only — `[0]` is selected at read time, later frames are never decoded |
 | Metadata in output | stripped by construction | stripped explicitly |
 | Format support | compile-time (`imagetypes()` is asked per call) | build-dependent (`queryFormats()` is asked per call) |
 
 Both enforce the same guards before decoding: a source byte cap and a pixel
 cap read from the image header — a 200-byte PNG is allowed to *claim*
-100000×100000 pixels, and the allocation happens at decode time.
+100000×100000 pixels, and the allocation happens at decode time. Imagick adds
+three of its own: the first frame is pinged and both the frame and its canvas
+are checked (a GIF's header reports the logical screen, the decoder allocates
+the frame — a 1×1 screen over a 4000×4000 frame passed the header guard);
+the coder is the detected media type's, never ImageMagick's guess from the
+bytes; and ImageMagick's width/height/list-length limits are narrowed to the
+pinged frame for the read and put back after it (process-wide state, only
+ever lowered).
 
 ## Security
 
@@ -249,8 +291,12 @@ cap read from the image header — a 200-byte PNG is allowed to *claim*
   cannot smuggle a slash or choose an output type independently.
 - Free-form transform parameters are not accepted anywhere, by design.
 - Decode guards run on the header before any pixel allocation
-  (`maxSourcePixels`, default 40 MP) and on the byte stream while reading
+  (`maxSourcePixels`, default 40 MP — per frame and canvas under Imagick, only
+  frame 0 is decoded) and on the byte stream while reading
   (`maxSourceBytes`, default 64 MiB).
+- PDF previews run ghostscript on untrusted input. Keep it current, keep
+  ImageMagick's `-dSAFER` delegate, and forbid the PDF coder in `policy.xml`
+  if you do not need previews — the processor then reports it as unsupported.
 - A derivative must be a pure function of the original bytes plus the preset
   version: under deduplication renditions live beside the shared stored object.
   Per-owner watermarks or redaction do not belong in this package's model.

@@ -76,6 +76,30 @@ does. Run `make test-images` whenever a processor changes.
   Keyed by the *physical* rendition on purpose: deduplicated logical rows, and
   flat-layout rows whose originals differ only in extension, write one object
   and must share one lock. Never key it by `BlobId` + descriptor filename.
+- **Imagick reads one frame, by filename selector.** `setFilename('<CODER>:source[0]')`
+  before `pingImageBlob()`/`readImageBlob()`; the blob API's second argument
+  ignores `[0]` (measured: 30 frames decoded). Reset the filename right after
+  the read — the coder prefix otherwise wins over `setImageFormat()` and every
+  rendition comes out in the source's format. The ping checks frame *and*
+  canvas (review 1.0 A4: GIF 1x1 screen over a 4000x4000 frame). Resource
+  limits are process-wide: only lowered, only around the read, restored in
+  `finally`; AREA/MEMORY are not used — past them IM 7 spills to disk instead
+  of refusing. LISTLENGTH must be 2, not 1 (IM refuses a list reaching it).
+- **ImageMagick `PolicyError` (code 499) is `UnsupportedSourceException`**
+  (`Processing\ImagickFailure`), tested in a child process with
+  `MAGICK_CONFIGURE_PATH` (`tests/Support/ImagickPolicy.php`): the policy is
+  read once at start-up.
+- **The PDF page geometry is the largest MediaBox in the file**, even for a
+  `[0]` ping — ImageMagick scans the whole file before ghostscript runs. An
+  upper bound, pinned by `theRenderGeometryIsTheLargestPageBoxInTheDocument`.
+- **Failure cache.** Only `UnsupportedSourceException`,
+  `ProcessingFailedException` and core's `SizeLimitExceededException` from
+  `process()`/`writeDerivative()` are remembered — never a missing original or
+  a `StoreException`. Checked before the lock, after losing it, and under it.
+  Key: hex sha256 of store, rendition path, `updatedAt`, content hash (PSR-16
+  reserves `:`).
+- `FlysystemStore` does not implement `DerivativeAwareStoreInterface` — keep
+  every doc saying so (README EN/RU, llms.txt, SKILL.md; review 1.0 A6).
 - `ThrowWithPreviousExceptionRector` is skipped in `rector.php`: it adds
   `code: $e->getCode()` (an int|string psalm rejects and a behaviour change).
   Same skip as the `*-db` packages.
