@@ -28,7 +28,14 @@ use Rasuvaeff\Yii3FilestorageImages\Preset;
  * ghostscript binary is possible (a stripped distro), and such a runtime
  * learns it at generation time: `process()` fails with
  * `ProcessingFailedException` naming the delegate, the same loud failure a
- * broken AVIF encoder produces.
+ * broken AVIF encoder produces. The registry cannot see a `policy.xml` that
+ * forbids the PDF coder either (Debian's default); that refusal surfaces from
+ * `process()` as `UnsupportedSourceException` — a verdict about the
+ * installation, not the file.
+ *
+ * Ghostscript parses untrusted PostScript. Keep it current, keep ImageMagick's
+ * default `-dSAFER` delegate, and prefer forbidding the PDF coder in
+ * `policy.xml` over this processor if PDFs are not needed.
  *
  * Resolution is chosen, not guessed: the page geometry is *pinged* and the
  * render DPI is the largest (≤ 150) that keeps the raster under the pixel
@@ -89,20 +96,25 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
 
         $bytes = SourceGuard::readBounded($source, $this->maxSourceBytes);
 
-        $dpi = $this->renderDpi($bytes);
-
         // Page zero, selected at READ time: the blob API takes no page
         // selector, and reading the whole document first ("then keep frame
         // 0") makes a hundred-page PDF cost a hundred renders before one is
         // kept. The spooled file with the `[0]` selector limits the
-        // ghostscript invocation to the first page.
+        // ghostscript invocation — and the geometry ping — to the first page.
         $spool = tempnam(sys_get_temp_dir(), 'filestorage-pdf');
-        \assert($spool !== false);
-        file_put_contents($spool, $bytes);
+        if ($spool === false || file_put_contents($spool, $bytes) !== \strlen($bytes)) {
+            if ($spool !== false) {
+                @unlink($spool);
+            }
+
+            throw new ProcessingFailedException('Could not spool the PDF to a temporary file');
+        }
 
         $image = new \Imagick();
 
         try {
+            $dpi = $this->renderDpi($spool);
+
             try {
                 // Density before the read: ImageMagick rasterises PDFs at the
                 // resolution in effect when the document is opened.
@@ -132,10 +144,7 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
 
                 $blob = $image->getImageBlob();
             } catch (\ImagickException $exception) {
-                throw new ProcessingFailedException(
-                    "Imagick could not render the PDF: {$exception->getMessage()}",
-                    previous: $exception,
-                );
+                throw ImagickFailure::from($exception, 'Imagick could not render the PDF');
             }
 
             if ($blob === '') {
@@ -154,25 +163,25 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
     }
 
     /**
-     * The render DPI: page geometry comes from `pingImageBlob()` — a metadata
-     * read at the 72-DPI baseline, nothing rasterised — and the DPI is the
-     * largest (up to 150) whose raster stays under the pixel cap.
-     *
-     * @param non-empty-string $bytes
+     * The render DPI: page geometry comes from a ping of page `[0]` — a
+     * metadata read at the 72-DPI baseline, nothing rasterised — and the DPI
+     * is the largest (up to 150) whose raster stays under the pixel cap.
+     * ImageMagick's PDF coder takes the page box from a scan of the whole
+     * file, so even this `[0]` ping reports the *largest* box in the
+     * document, not page one's (measured, review 1.0 #13). That is an upper
+     * bound — the render can only come out under the cap — and one oversized
+     * page refuses the document's preview.
      */
-    private function renderDpi(string $bytes): float
+    private function renderDpi(string $spool): float
     {
         $ping = new \Imagick();
 
         try {
-            $ping->pingImageBlob($bytes);
+            $ping->pingImage($spool . '[0]');
             $pageWidth = $ping->getImageWidth();
             $pageHeight = $ping->getImageHeight();
         } catch (\ImagickException $exception) {
-            throw new ProcessingFailedException(
-                "Imagick could not read the PDF page geometry: {$exception->getMessage()}",
-                previous: $exception,
-            );
+            throw ImagickFailure::from($exception, 'Imagick could not read the PDF page geometry');
         } finally {
             $ping->clear();
         }

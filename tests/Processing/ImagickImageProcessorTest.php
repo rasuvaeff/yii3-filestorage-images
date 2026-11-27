@@ -11,6 +11,7 @@ use Rasuvaeff\Yii3FilestorageImages\Fit;
 use Rasuvaeff\Yii3FilestorageImages\Format;
 use Rasuvaeff\Yii3FilestorageImages\Preset;
 use Rasuvaeff\Yii3FilestorageImages\Processing\ImagickImageProcessor;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\ImagickPolicy;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Png;
 use Testo\Assert;
 use Testo\Codecov\Covers;
@@ -378,6 +379,29 @@ final class ImagickImageProcessorTest
         }
 
         Assert::same(\Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH), $before);
+    }
+
+    /**
+     * A `policy.xml` that forbids the source's coder is a verdict about the
+     * installation, not about the file: an unsupported source (a skip for
+     * `filestorage:warm`), not a processing failure.
+     */
+    public function aPolicyThatForbidsTheCoderIsAnUnsupportedSource(): void
+    {
+        $this->requireExtension();
+
+        $image = new \Imagick();
+        $image->newImage(8, 8, 'orange', 'GIF');
+
+        Assert::same(
+            ImagickPolicy::run(
+                'GIF',
+                'new ' . ImagickImageProcessor::class . '(new ' . Psr17Factory::class . '())',
+                'image/gif',
+                $image->getImageBlob(),
+            ),
+            UnsupportedSourceException::class,
+        );
     }
 
     public function failsOnBytesThatDoNotDecode(): void

@@ -10,6 +10,7 @@ use Rasuvaeff\Yii3FilestorageImages\Exception\UnsupportedSourceException;
 use Rasuvaeff\Yii3FilestorageImages\Format;
 use Rasuvaeff\Yii3FilestorageImages\Preset;
 use Rasuvaeff\Yii3FilestorageImages\Processing\PdfPreviewProcessor;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\ImagickPolicy;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Pdf;
 use Testo\Assert;
 use Testo\Codecov\Covers;
@@ -125,6 +126,56 @@ final class PdfPreviewProcessorTest
         // nothing: the raster is the output.
         Assert::true($processed->width > 400 && $processed->width < 430, "first page not used alone: {$processed->width}");
         Assert::true($processed->height > 200 && $processed->height < 215, "first page not used alone: {$processed->height}");
+    }
+
+    /**
+     * Review 1.0 #13 asked whether the DPI comes from the last page instead
+     * of the rendered one. Measured: ImageMagick's PDF coder takes the page
+     * box from a scan of the whole file before ghostscript runs, so even a
+     * ping of `[0]` reports the largest box — 2000x2000 here, for a 200x100
+     * first page. That is an upper bound: the render can come out smaller
+     * than the cap allows, never larger. Pinned so the conservative reading
+     * is a decision, not an accident: one oversized page refuses the
+     * document's preview.
+     */
+    public function theRenderGeometryIsTheLargestPageBoxInTheDocument(): void
+    {
+        if (!$this->available()) {
+            throw new SkipTest('the imagick PDF delegate is not available');
+        }
+
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('2000x2000 points');
+
+        (new PdfPreviewProcessor(new Psr17Factory(), maxSourcePixels: 1_000_000))->process(
+            $this->stream(Pdf::twoPages(200, 100, secondWidth: 2000, secondHeight: 2000)),
+            'application/pdf',
+            new Preset(name: 'x', format: Format::Png, width: 1000, upscale: false),
+        );
+    }
+
+    /**
+     * Review 1.0 #13: an ImageMagick `policy.xml` that forbids the PDF coder
+     * (Debian's default) is invisible to `supports()`. The refusal is a
+     * verdict about this installation, not about the file, so it surfaces as
+     * `UnsupportedSourceException` — `filestorage:warm` counts a skip, not a
+     * broken rendition. Run in a child process: the policy is read once, at
+     * ImageMagick's start-up.
+     */
+    public function aPolicyThatForbidsPdfIsAnUnsupportedSource(): void
+    {
+        if (!$this->available()) {
+            throw new SkipTest('the imagick PDF delegate is not available');
+        }
+
+        Assert::same(
+            ImagickPolicy::run(
+                'PDF',
+                'new ' . PdfPreviewProcessor::class . '(new ' . Psr17Factory::class . '())',
+                'application/pdf',
+                Pdf::page(),
+            ),
+            UnsupportedSourceException::class,
+        );
     }
 
     /** One zero side is as empty as two — the message names the page, not the crash. */

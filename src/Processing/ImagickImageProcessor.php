@@ -125,10 +125,7 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
 
                 $blob = $image->getImageBlob();
             } catch (ImagickException $exception) {
-                throw new ProcessingFailedException(
-                    "Imagick could not process the image: {$exception->getMessage()}",
-                    previous: $exception,
-                );
+                throw ImagickFailure::from($exception, 'Imagick could not process the image');
             }
 
             if ($blob === '') {
@@ -168,10 +165,7 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
             $height = $ping->getImageHeight();
             $page = $ping->getImagePage();
         } catch (ImagickException $exception) {
-            throw new ProcessingFailedException(
-                "Imagick could not process the image: {$exception->getMessage()}",
-                previous: $exception,
-            );
+            throw ImagickFailure::from($exception, 'Imagick could not process the image');
         } finally {
             $ping->clear();
         }

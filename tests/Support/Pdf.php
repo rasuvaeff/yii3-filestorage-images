@@ -71,10 +71,10 @@ final class Pdf
 
     /**
      * @return non-empty-string A real two-page PDF: the first page of the
-     *         given size, the second one much smaller — the preview must come
-     *         from the first page alone.
+     *         given size, the second one (by default much smaller) — the
+     *         preview must come from the first page alone.
      */
-    public static function twoPages(int $width, int $height): string
+    public static function twoPages(int $width, int $height, int $secondWidth = 20, int $secondHeight = 10): string
     {
         return self::build([
             '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
@@ -82,7 +82,7 @@ final class Pdf
             "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {$width} {$height}]"
                 . ' /Resources << /ProcSet [/PDF] >> /Contents 4 0 R >> endobj',
             '4 0 obj ' . self::stream(' ') . ' endobj',
-            '5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 10]'
+            "5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {$secondWidth} {$secondHeight}]"
                 . ' /Resources << /ProcSet [/PDF] >> /Contents 6 0 R >> endobj',
             '6 0 obj ' . self::stream(' ') . ' endobj',
         ]);

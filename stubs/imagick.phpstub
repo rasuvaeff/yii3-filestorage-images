@@ -38,6 +38,8 @@ class Imagick
 
     public function pingImageBlob(string $image): bool {}
 
+    public function pingImage(string $filename): bool {}
+
     /**
      * @return array{width: int, height: int, x: int, y: int}
      */
