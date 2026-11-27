@@ -46,7 +46,7 @@ capability. Namespace `Rasuvaeff\Yii3FilestorageImages\`. Full API reference:
 
 - `Yiisoft\Mutex\MutexFactoryInterface` — the generation-lock driver.
 - The store must implement `DerivativeAwareStoreInterface`
-  (core filesystem stores and FlysystemStore qualify);
+  (core `FileSystemStore` qualifies; `FlysystemStore` does not implement it yet);
   URL results additionally need `DerivativeUrlProviderInterface`.
 - `filestorage:warm` needs `MaintenanceRepositoryInterface` (the `-db`
   repository).
@@ -54,7 +54,8 @@ capability. Namespace `Rasuvaeff\Yii3FilestorageImages\`. Full API reference:
 ## Serving
 
 `urlFor()` = direct public URL (only under `allowDirectPublicUrl`) →
-store-native temporary URL → `null`, in which case the application serves
-`stream()` itself. Signed proxy delivery of variants through
-`yii3-filestorage-web` is not wired yet — its download action refuses tokens
-carrying a variant until it integrates with this package.
+store-native temporary URL → signed proxy URL carrying the variant (when
+`yii3-filestorage-web` binds `ProxyUrlGeneratorInterface`) → `null`, in which
+case the application serves `stream()` itself. The `-web` download action
+serves variant tokens through `DerivativeResolverInterface`, which this package
+binds to `Derivatives`.
