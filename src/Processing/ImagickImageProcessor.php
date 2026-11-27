@@ -206,10 +206,13 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
         $narrowed = [
             Imagick::RESOURCETYPE_WIDTH => $width,
             Imagick::RESOURCETYPE_HEIGHT => $height,
+        ];
+        // Newer than width/height: absent from older imagick builds.
+        if (\defined('Imagick::RESOURCETYPE_LISTLENGTH')) {
             // Two, not one: ImageMagick refuses a list whose length reaches
             // the limit, so one would refuse the single frame itself.
-            Imagick::RESOURCETYPE_LISTLENGTH => 2,
-        ];
+            $narrowed[Imagick::RESOURCETYPE_LISTLENGTH] = 2;
+        }
         $previous = [];
         foreach ($narrowed as $type => $limit) {
             $current = Imagick::getResourceLimit($type);

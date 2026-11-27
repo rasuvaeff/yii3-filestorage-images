@@ -143,6 +143,12 @@ final class PdfPreviewProcessorTest
         if (!$this->available()) {
             throw new SkipTest('the imagick PDF delegate is not available');
         }
+        if (getenv('SKIP_PDF_RENDERS')) {
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
+        }
+        if (getenv('INFECTION')) {
+            throw new SkipTest('a crashing gs aborts the Infection process group');
+        }
 
         Expect::exception(UnsupportedSourceException::class)->withMessageContaining('2000x2000 points');
 
@@ -165,6 +171,12 @@ final class PdfPreviewProcessorTest
     {
         if (!$this->available()) {
             throw new SkipTest('the imagick PDF delegate is not available');
+        }
+        if (getenv('SKIP_PDF_RENDERS')) {
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
+        }
+        if (getenv('INFECTION')) {
+            throw new SkipTest('a crashing gs aborts the Infection process group');
         }
 
         Assert::same(

@@ -294,6 +294,10 @@ final class ImagickImageProcessorTest
         }
         $bytes = $animation->getImagesBlob();
 
+        if (!\defined('Imagick::RESOURCETYPE_LISTLENGTH')) {
+            throw new SkipTest('this imagick build has no list-length resource limit');
+        }
+
         $previous = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH);
         \Imagick::setResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH, 2);
 
@@ -341,11 +345,11 @@ final class ImagickImageProcessorTest
     {
         $this->requireExtension();
 
-        $before = [
-            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH),
-            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_HEIGHT),
-            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH),
-        ];
+        $limits = [\Imagick::RESOURCETYPE_WIDTH, \Imagick::RESOURCETYPE_HEIGHT];
+        if (\defined('Imagick::RESOURCETYPE_LISTLENGTH')) {
+            $limits[] = \Imagick::RESOURCETYPE_LISTLENGTH;
+        }
+        $before = array_map(\Imagick::getResourceLimit(...), $limits);
 
         (new ImagickImageProcessor(new Psr17Factory()))->process(
             $this->pngSource(40, 20),
@@ -353,11 +357,7 @@ final class ImagickImageProcessorTest
             new Preset(name: 'thumb', format: Format::Png, width: 10),
         );
 
-        Assert::same([
-            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH),
-            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_HEIGHT),
-            \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH),
-        ], $before);
+        Assert::same(array_map(\Imagick::getResourceLimit(...), $limits), $before);
     }
 
     /**
