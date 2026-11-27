@@ -15,6 +15,9 @@ use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeAwareStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeDescriptor;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeObject;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\DirectoryLayout;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
+use Rasuvaeff\Yii3Filestorage\Store\StoredObjectId;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
 use Rasuvaeff\Yii3Filestorage\Upload;
 
@@ -30,7 +33,7 @@ final class DerivativeAwareMemoryStore implements DerivativeAwareStoreInterface
     /** @var array<string, string> Original relative path => bytes. */
     private array $objects = [];
 
-    /** @var array<string, string> Derivative key => bytes. */
+    /** @var array<string, string> Derivative path, as the layout names it => bytes. */
     private array $derivatives = [];
 
     /** @var list<string> Derivative keys in write order. */
@@ -39,6 +42,7 @@ final class DerivativeAwareMemoryStore implements DerivativeAwareStoreInterface
     public function __construct(
         private readonly string $name = 'memory',
         private readonly Psr17Factory $streams = new Psr17Factory(),
+        private readonly ObjectLayoutInterface $layout = new DirectoryLayout(),
     ) {}
 
     public function setObject(string $relativePath, string $bytes): void
@@ -63,6 +67,12 @@ final class DerivativeAwareMemoryStore implements DerivativeAwareStoreInterface
     }
 
     #[Override]
+    public function layout(): ObjectLayoutInterface
+    {
+        return $this->layout;
+    }
+
+    #[Override]
     public function write(
         Upload $upload,
         string $groupName,
@@ -76,12 +86,10 @@ final class DerivativeAwareMemoryStore implements DerivativeAwareStoreInterface
     #[Override]
     public function delete(File $file): void
     {
-        unset($this->objects[$file->relativePath]);
-        foreach (array_keys($this->derivatives) as $key) {
-            if (str_starts_with($key, $file->relativePath . '::')) {
-                unset($this->derivatives[$key]);
-            }
-        }
+        $deletion = $this->layout->deletion(new StoredObjectId($file->relativePath));
+        $kept = static fn(string $path): bool => !$deletion->contains($path);
+        $this->objects = array_filter($this->objects, $kept, ARRAY_FILTER_USE_KEY);
+        $this->derivatives = array_filter($this->derivatives, $kept, ARRAY_FILTER_USE_KEY);
     }
 
     #[Override]
@@ -143,7 +151,7 @@ final class DerivativeAwareMemoryStore implements DerivativeAwareStoreInterface
         $this->derivativeWrites[] = $key;
 
         return new DerivativeObject(
-            relativePath: \dirname($file->relativePath) . '/' . $derivative->fileName(),
+            relativePath: $key,
             size: max(0, \strlen($bytes)),
             mediaType: $derivative->mediaType,
         );
@@ -151,6 +159,6 @@ final class DerivativeAwareMemoryStore implements DerivativeAwareStoreInterface
 
     private function derivativeKey(File $file, DerivativeDescriptor $derivative): string
     {
-        return $file->relativePath . '::' . $derivative->fileName();
+        return $this->layout->derivativePath($file, $derivative);
     }
 }

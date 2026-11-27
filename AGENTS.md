@@ -23,7 +23,9 @@ Namespace `Rasuvaeff\Yii3FilestorageImages`.
    physical name (changing options without bumping `version` serves stale
    objects), and every decode is preceded by the byte + header-pixel guards.
    A rendition must stay a pure function of original bytes + preset version:
-   under dedup it lives in the shared blob directory.
+   under dedup it lives beside the shared stored object. Never build a
+   derivative path here: the store's layout (`layout()->derivativePath()`)
+   names it, and the generation lock is keyed by that path.
 4. **Preserve the public contract.** Update README + tests with any API change.
 
 ## Commands
@@ -69,9 +71,11 @@ does. Run `make test-images` whenever a processor changes.
 - `Imagick::autoOrientImage()` does not exist in every imagick build —
   orientation is applied manually via `getImageOrientation()` +
   `flopImage()`/`rotateImage()`. Do not "simplify" it back.
-- The generation lock name is `filestorage-images:` + sha256 of
-  `BlobId->key()` + descriptor filename. Keyed by *physical* identity on
-  purpose: deduplicated logical rows must share the lock.
+- The generation lock name is `filestorage-images:` + sha256 of the store name
+  + the rendition path from `layout()->derivativePath($file, $descriptor)`.
+  Keyed by the *physical* rendition on purpose: deduplicated logical rows, and
+  flat-layout rows whose originals differ only in extension, write one object
+  and must share one lock. Never key it by `BlobId` + descriptor filename.
 - `ThrowWithPreviousExceptionRector` is skipped in `rector.php`: it adds
   `code: $e->getCode()` (an int|string psalm rejects and a behaviour change).
   Same skip as the `*-db` packages.

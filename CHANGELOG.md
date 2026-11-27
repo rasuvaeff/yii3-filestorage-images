@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.8.0 — 2026-11-27
+
+- **Changed:** requires `rasuvaeff/yii3-filestorage` `^0.9` (store layouts, two-phase `gc`). This release no longer installs with core 0.8; stay on 0.7.1 for it.
+- Enh #21: renditions follow the store's object layout. Stores already place them through `StoreInterface::layout()`; the generation lock is now keyed by the store name plus the path `ObjectLayoutInterface::derivativePath()` names, instead of the original's path plus the descriptor filename, so under core's `FlatSiblingLayout` (`<sha>.jpg` → `<sha>-thumb-v1.webp`) two rows naming one rendition share one lock. During a rolling deploy old and new processes use different lock names for the same rendition; the worst case is one duplicate generation, since derivative writes are atomic.
+- Docs: README, llms.txt and the agent skill describe the flat-layout naming; the `suggest` entry for `rasuvaeff/yii3-filestorage-web` says what it is — variant tokens are served there (0.5.2+) through `DerivativeResolverInterface`.
+
 ## 0.7.1 — 2026-11-27
 
 - Docs: the agent skill no longer says `FlysystemStore` supports derivatives, and documents the signed proxy URL step of `urlFor()` and the `-web` variant delivery that are already wired.

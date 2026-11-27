@@ -42,14 +42,20 @@ integration is exercised against it.
   would silently keep serving objects generated with the old settings; bumping
   `version` creates a new object instead.
 - **Lazy with cache.** The first request generates the rendition once, stores
-  it beside the original (`<key>/original.jpg` + `<key>/thumb-v1.webp`, no
-  metadata rows), and every later request is a plain read. New presets work
+  it beside the original where the store's layout puts it (no metadata rows),
+  and every later request is a plain read.
+  Under the default `DirectoryLayout` that is `<key>/original.jpg` +
+  `<key>/thumb-v1.webp`; under core's opt-in `FlatSiblingLayout` it is
+  `blobs/ab/cd/<sha>.jpg` + `blobs/ab/cd/<sha>-thumb-v1.webp`. The layout is
+  chosen once per store, in core; this package never builds a path itself. New presets work
   retroactively with no backfill. `filestorage:warm` pre-generates through the
   exact same locked path when eager is wanted.
-- **A lock keyed by physical blob identity.** Under deduplication many `File`
-  rows share one object directory; the generation lock is keyed by
-  `BlobId` + versioned derivative name, so concurrent requests — including
-  requests for different logical files sharing bytes — generate once.
+- **A lock keyed by the physical rendition.** Under deduplication many `File`
+  rows share one stored object; the generation lock is keyed by the store name
+  plus the rendition path the store's layout names
+  (`ObjectLayoutInterface::derivativePath()`), so concurrent requests —
+  including requests for different logical files sharing bytes — generate
+  once.
 - **Dimensions into metadata at upload time** (`ImageMetadataStorage`). An
   optional decorator over the storage facade: on `add()` it reads the image
   header (bounded prefix, never a decode — the upload policy's own recipe)
@@ -168,7 +174,7 @@ The facade implements core's `DerivativeResolverInterface` — that contract is
 what `yii3-filestorage-web`'s download action consumes to serve variant
 tokens, so installing both packages is the whole wiring: `urlFor()` starts
 returning signed proxy URLs for a private filesystem store, and those URLs
-resolve (`yii3-filestorage-web` 0.5.0+ — earlier releases require an older
+resolve (`yii3-filestorage-web` 0.5.2+ — earlier releases require an older
 core). `UnknownPresetException` extends core's
 `UnresolvableVariantException`, the "map it to 404" signal.
 
@@ -177,7 +183,10 @@ Failure vocabulary: `UnknownPresetException` (not in the whitelist — map it to
 combination — a PDF in a raster pipeline, a source over a guard),
 `ProcessingFailedException` (the bytes do not decode),
 `DerivativeGenerationException` (store lacks the capability, original bytes
-missing, lock timeout). Malformed preset config throws
+missing, lock timeout). A file whose path does not fit its store's layout (a
+`FlatSiblingLayout` store holding `photo-1.jpg`) surfaces core's
+`InvalidArgumentException` from the layout: the store is misconfigured, not the
+request. Malformed preset config throws
 `InvalidPresetException` at container build time, naming the offending key.
 
 ### Warm ahead of traffic
@@ -243,7 +252,7 @@ cap read from the image header — a 200-byte PNG is allowed to *claim*
   (`maxSourcePixels`, default 40 MP) and on the byte stream while reading
   (`maxSourceBytes`, default 64 MiB).
 - A derivative must be a pure function of the original bytes plus the preset
-  version: under deduplication renditions live in the shared blob directory.
+  version: under deduplication renditions live beside the shared stored object.
   Per-owner watermarks or redaction do not belong in this package's model.
 - SVG output of the sanitizer is safe*r*, not safe to inline from your app
   origin — active-content delivery rules from the core package still apply.

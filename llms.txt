@@ -31,11 +31,15 @@ ImageMetadataStorage($s)`.
 - The preset `version` is part of the physical name: `thumb-v2.webp`. Changing
   any preset option requires bumping `version`, or stale objects keep being
   served.
-- A derivative is a sibling object, not a metadata row:
-  `<key>/original.jpg` + `<key>/thumb-v1.webp`. Deleting a file deletes the
-  directory, derivatives included.
-- Generation is lazy and runs under a mutex keyed by physical
-  `BlobId + descriptor`, so deduplicated rows sharing bytes generate once.
+- A derivative is a sibling object, not a metadata row, placed by the store's
+  layout (`StoreInterface::layout()->derivativePath(File, DerivativeDescriptor)`,
+  core ^0.9): `DirectoryLayout` (default) → `<key>/original.jpg` +
+  `<key>/thumb-v1.webp`; `FlatSiblingLayout` → `blobs/ab/cd/<sha>.jpg` +
+  `blobs/ab/cd/<sha>-thumb-v1.webp`. Deleting a file deletes what the layout
+  names, derivatives included. This package never builds a path itself.
+- Generation is lazy and runs under a mutex keyed by the store name + the
+  rendition path the layout names, so deduplicated rows sharing bytes (and,
+  under the flat layout, rows naming one rendition) generate once.
 - A derivative must be a pure function of original bytes + preset version
   (blob-scoped sharing under dedup). No per-owner watermarks here.
 - Decode guards: `maxSourceBytes` (default 64 MiB) while reading,
@@ -94,6 +98,8 @@ Throws: `UnknownPresetException`, `UnsupportedSourceException` (skip-grade:
 unprocessable combination or over a guard), `ProcessingFailedException`
 (corrupt bytes), `DerivativeGenerationException` (no capability / missing
 original / lock timeout). All implement the core `FilestorageException`.
+A file path that does not fit the store's layout surfaces core's
+`InvalidArgumentException` (misconfigured store).
 
 ### `Preset` / `PresetRegistry`
 

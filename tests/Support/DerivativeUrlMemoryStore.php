@@ -12,6 +12,7 @@ use Rasuvaeff\Yii3Filestorage\Path\PathGeneratorInterface;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeDescriptor;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeObject;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeUrlProviderInterface;
+use Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface;
 use Rasuvaeff\Yii3Filestorage\Store\StoreResult;
 use Rasuvaeff\Yii3Filestorage\Upload;
 
@@ -33,7 +34,7 @@ final readonly class DerivativeUrlMemoryStore implements DerivativeUrlProviderIn
     public function publicDerivativeUrl(File $file, DerivativeDescriptor $derivative): ?string
     {
         return $this->publicUrls
-            ? "https://cdn.example.test/{$file->relativePath}/../{$derivative->fileName()}"
+            ? 'https://cdn.example.test/' . $this->layout()->derivativePath($file, $derivative)
             : null;
     }
 
@@ -52,6 +53,12 @@ final readonly class DerivativeUrlMemoryStore implements DerivativeUrlProviderIn
     public function name(): string
     {
         return $this->inner->name();
+    }
+
+    #[Override]
+    public function layout(): ObjectLayoutInterface
+    {
+        return $this->inner->layout();
     }
 
     #[Override]

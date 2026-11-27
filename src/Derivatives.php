@@ -11,7 +11,6 @@ use Psr\Clock\ClockInterface;
 use Psr\Http\Message\StreamInterface;
 use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
-use Rasuvaeff\Yii3Filestorage\Store\BlobId;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeAwareStoreInterface;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeDescriptor;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeResolverInterface;
@@ -35,13 +34,15 @@ use Yiisoft\Mutex\MutexFactoryInterface;
  * drives {@see ensure()} over existing files when eager generation is wanted —
  * same locked path, no second code path to diverge.
  *
- * The generation lock is keyed by *physical* blob identity plus the versioned
- * derivative name, not by logical file id: under deduplication many `File`
- * rows share one object directory, and two of them generating `thumb-v1`
- * concurrently would race on the same physical path. A consequence the caller
- * accepts by using blob-scoped derivatives: a rendition must be a pure
- * function of the original bytes and the preset version. Per-owner watermarks
- * or redaction do not belong in a shared directory.
+ * The generation lock is keyed by the *physical* object the rendition is
+ * written to — the store's name plus the path its layout names
+ * ({@see \Rasuvaeff\Yii3Filestorage\Store\Layout\ObjectLayoutInterface::derivativePath()}),
+ * not by logical file id: under deduplication many `File` rows share one
+ * stored object, and two of them generating `thumb-v1` concurrently would race
+ * on the same physical path. A consequence the caller accepts by using
+ * blob-scoped derivatives: a rendition must be a pure function of the
+ * original bytes and the preset version. Per-owner watermarks or redaction do
+ * not belong beside a shared object.
  *
  * @api
  */
@@ -148,7 +149,7 @@ final readonly class Derivatives implements DerivativeResolverInterface
             );
         }
 
-        $mutex = $this->mutexes->create($this->lockName($file, $descriptor));
+        $mutex = $this->mutexes->create($this->lockName($store, $file, $descriptor));
         if (!$mutex->acquire($this->lockTimeoutSeconds)) {
             // Losing the lock usually means winning the race: whoever held it
             // was generating this very object. One last probe tells a timeout
@@ -277,14 +278,20 @@ final readonly class Derivatives implements DerivativeResolverInterface
     /**
      * @return non-empty-string
      */
-    private function lockName(File $file, DerivativeDescriptor $descriptor): string
-    {
-        // Physical identity, hashed only to bound the name for mutex drivers
-        // with key-length limits. The `filestorage-images:` prefix keeps the
-        // key from colliding with anything else sharing the mutex backend.
+    private function lockName(
+        DerivativeAwareStoreInterface $store,
+        File $file,
+        DerivativeDescriptor $descriptor,
+    ): string {
+        // The physical object, as the store's layout names it — not the
+        // original's path plus a filename: under a flat layout two rows can
+        // name one derivative object, and they must share one lock. Hashed
+        // only to bound the name for mutex drivers with key-length limits; the
+        // `filestorage-images:` prefix keeps the key from colliding with
+        // anything else sharing the mutex backend.
         return 'filestorage-images:' . hash(
             'sha256',
-            BlobId::create($file->storeName, $file->relativePath)->key() . '/' . $descriptor->fileName(),
+            $file->storeName . ':' . $store->layout()->derivativePath($file, $descriptor),
         );
     }
 }
