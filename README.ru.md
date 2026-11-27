@@ -69,7 +69,7 @@ SVG-санитайзер для единственного формата изо
 ## Требования
 
 - PHP 8.3 – 8.6, `ext-dom`, `ext-libxml`
-- `rasuvaeff/yii3-filestorage` ^0.3
+- `rasuvaeff/yii3-filestorage` ^0.8.2
 - Расширение-процессор: `ext-gd` и/или `ext-imagick` (при обоих предпочитается
   Imagick — он применяет EXIF-ориентацию и покрывает больше форматов)
 - Драйвер `yiisoft/mutex` для лока генерации (например `yiisoft/mutex-file`)
@@ -171,7 +171,7 @@ final readonly class AvatarPresenter
 потребляет download-экшен из `yii3-filestorage-web` для отдачи variant-токенов,
 так что установка обоих пакетов и есть вся проводка: `urlFor()` начинает
 отдавать подписанные прокси-URL для приватного filesystem-стора, и эти URL
-разрешаются (`yii3-filestorage-web` 0.3.0+ — более ранние релизы требуют
+разрешаются (`yii3-filestorage-web` 0.5.0+ — более ранние релизы требуют
 старое ядро и variant-токены не отдают). `UnknownPresetException` наследует core-овский
 `UnresolvableVariantException` — сигнал «ответь 404».
 
