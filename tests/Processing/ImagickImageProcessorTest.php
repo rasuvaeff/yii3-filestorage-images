@@ -255,7 +255,9 @@ final class ImagickImageProcessorTest
      * logical screen; ImageMagick decodes each frame at its own descriptor
      * size. Screen patched to 1x1, frame 1500x1500: the header guard saw one
      * pixel, the decoder allocated 2.25 MP past a 1 MP cap. GD refuses such a
-     * file; Imagick decoded it.
+     * file; Imagick decoded it. The shared header guard now walks the GIF
+     * blocks and refuses the frame first (core review pass 2, N1); the
+     * frame ping stays behind it.
      */
     public function aFrameLargerThanItsLogicalScreenIsRefusedBeforeDecoding(): void
     {
@@ -268,7 +270,8 @@ final class ImagickImageProcessorTest
         $bytes = substr_replace($bytes, "\x01\x00\x01\x00", 6, 4);
         Assert::same(\array_slice((array) getimagesizefromstring($bytes), 0, 2), [1, 1]);
 
-        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('pixel processing cap');
+        Expect::exception(UnsupportedSourceException::class)
+            ->withMessageContaining('GIF frame 1500x1500 at (0,0) does not fit its 1x1 logical screen');
 
         (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: 1_000_000))->process(
             (new Psr17Factory())->createStream($bytes),

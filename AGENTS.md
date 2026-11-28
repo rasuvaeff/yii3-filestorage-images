@@ -81,7 +81,11 @@ does. Run `make test-images` whenever a processor changes.
   ignores `[0]` (measured: 30 frames decoded). Reset the filename right after
   the read — the coder prefix otherwise wins over `setImageFormat()` and every
   rendition comes out in the source's format. The ping checks frame *and*
-  canvas (review 1.0 A4: GIF 1x1 screen over a 4000x4000 frame). Resource
+  canvas (review 1.0 A4: GIF 1x1 screen over a 4000x4000 frame). In front of
+  it `SourceGuard::dimensions()` walks GIF blocks (core pass 2 N1): a frame
+  outside the logical screen is refused for both processors, unknown bytes are
+  skipped as IM/libgd skip them; the ping's frame branch is now unreachable for
+  GIF (kept as defence in depth). GD sizes from `imagesx()/imagesy()`. Resource
   limits are process-wide: only lowered, only around the read, restored in
   `finally`; AREA/MEMORY are not used — past them IM 7 spills to disk instead
   of refusing. LISTLENGTH must be 2, not 1 (IM refuses a list reaching it).

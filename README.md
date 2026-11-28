@@ -217,8 +217,10 @@ in a queue job or a mail, for a tenant's file, needs a generator pinned to
 that tenant: `$derivatives->withProxyUrls($hmacGenerator->forScope($tenantId))`
 (`-web`'s `HmacProxyUrlGenerator::forScope()`) returns the same facade minting
 through it, and `Srcset::for()` over that facade does the same. Core's
-`Storage::urlFor()` has no such hook: for originals, enter the tenant's
-context (see `-web`'s README) or call the pinned generator directly.
+`Storage::urlFor()` has the same hook since core 0.10 —
+`$storage->withProxyUrls($hmacGenerator->forScope($tenantId))->urlFor($file)` on
+the concrete `Storage` (and `-db`'s `DeduplicatingStorage` 0.4+, not on
+`StorageInterface`); or enter the tenant's context (see `-web`'s README).
 
 ### Failed generations are remembered
 
@@ -264,6 +266,15 @@ file.
 Requires the backend to implement the core `MaintenanceRepositoryInterface`
 (the `-db` repository does).
 
+**Under tenancy it is a global walk.** With a `FileScopeProviderInterface`
+bound, `-db` refuses an unscoped `MaintenanceRepositoryInterface` unless the
+application sets `-db`'s `globalMaintenanceAccess` param — and with it set,
+`filestorage:warm` walks **every tenant's** files, not the current one's.
+That is what a maintenance command is for (renditions are per file, not per
+tenant, and nothing is served by it), but set the param only in the console
+config the command runs under. Without it, under tenancy, the command fails
+at resolution with `-db`'s `MissingScopeException`.
+
 ### Sanitize SVG
 
 SVG is not handled by the processors — it is not a raster format, it is a
@@ -304,10 +315,15 @@ polyglots at the cost of not preserving the uploaded bytes.
 
 Both enforce the same guards before decoding: a source byte cap and a pixel
 cap read from the image header — a 200-byte PNG is allowed to *claim*
-100000×100000 pixels, and the allocation happens at decode time. Imagick adds
-three of its own: the first frame is pinged and both the frame and its canvas
-are checked (a GIF's header reports the logical screen, the decoder allocates
-the frame — a 1×1 screen over a 4000×4000 frame passed the header guard);
+100000×100000 pixels, and the allocation happens at decode time. For a GIF the
+header guard walks the blocks: `getimagesize()` reports the logical screen,
+while a decoder allocates each frame at its own size, so a frame that does
+not fit inside its screen is refused (a 1×1 screen over an 8000×8000 frame
+passed it before) and the screen bounds every frame the cap is checked
+against; a byte that starts no block is skipped as ImageMagick and libgd
+skip it. GD sizes the output from the decoded first frame, which may be
+smaller than the screen. Imagick adds three of its own: the first frame is
+pinged and both the frame and its canvas are checked;
 the coder is the detected media type's, never ImageMagick's guess from the
 bytes; and ImageMagick's width/height/list-length limits are narrowed to the
 pinged frame for the read and put back after it (process-wide state, only
@@ -324,8 +340,8 @@ sequences are untested.
   cannot smuggle a slash or choose an output type independently.
 - Free-form transform parameters are not accepted anywhere, by design.
 - Decode guards run on the header before any pixel allocation
-  (`maxSourcePixels`, default 40 MP — per frame and canvas under Imagick, only
-  frame 0 is decoded) and on the byte stream while reading
+  (`maxSourcePixels`, default 40 MP — a GIF frame must fit its logical
+  screen; per frame and canvas under Imagick, only frame 0 is decoded) and on the byte stream while reading
   (`maxSourceBytes`, default 64 MiB).
 - PDF previews run ghostscript on untrusted input. Keep it current, keep
   ImageMagick's `-dSAFER` delegate, and forbid the PDF coder in `policy.xml`

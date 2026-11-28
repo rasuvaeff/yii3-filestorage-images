@@ -30,8 +30,10 @@ capability. Namespace `Rasuvaeff\Yii3FilestorageImages\`. Full API reference:
 
 3. **Guards precede every decode.** `maxSourceBytes` bounds the read;
    `maxSourcePixels` is checked against the *header* before the decoder
-   allocates. A 200-byte PNG may claim 100000×100000 pixels. Under Imagick a
-   GIF header reports the logical screen, not the frame: ping frame `[0]`
+   allocates. A 200-byte PNG may claim 100000×100000 pixels. A GIF header
+   reports the logical screen, not the frames: `SourceGuard` walks the blocks
+   and refuses a frame outside the screen (both processors). Under Imagick also
+   ping frame `[0]`
    (filename selector — `readImageBlob()`'s second argument ignores it), check
    frame and canvas, force the coder from the detected media type, decode only
    `[0]`, and narrow IM's resource limits only for the read.
@@ -56,7 +58,8 @@ capability. Namespace `Rasuvaeff\Yii3FilestorageImages\`. Full API reference:
   does not — every rendition on S3 fails, `-web` answers 404);
   URL results additionally need `DerivativeUrlProviderInterface`.
 - `filestorage:warm` needs `MaintenanceRepositoryInterface` (the `-db`
-  repository).
+  repository). Under tenancy `-db` grants it only with `globalMaintenanceAccess`,
+  and then warm walks every tenant — console config only.
 - Optional `Psr\SimpleCache\CacheInterface` — remembers failed generations
   for `failureTtl`; without it a source that always fails is decoded again on
   every request. Never remember a missing original, a store error or a

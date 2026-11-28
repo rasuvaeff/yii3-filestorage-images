@@ -47,7 +47,9 @@ ImageMetadataStorage($s)`.
   (blob-scoped sharing under dedup). No per-owner watermarks here.
 - Decode guards: `maxSourceBytes` (default 64 MiB) while reading,
   `maxSourcePixels` (default 40'000'000) from the image header before decode.
-  Imagick also pings frame `[0]` with the coder of the detected media type
+  A GIF's blocks are walked: a frame not fitting its logical screen is
+  `UnsupportedSourceException` (getimagesize reports the screen only); GD sizes
+  the output from the decoded frame. Imagick also pings frame `[0]` with the coder of the detected media type
   (never IM's sniffing) and checks the frame and its canvas (GIF logical
   screen can be smaller than the frame), reads only `[0]`, and narrows IM's
   WIDTH/HEIGHT/LISTLENGTH limits for the read (restored after; only lowered;
@@ -116,7 +118,8 @@ the proxy URL is minted without generating, but unsupported sources, the byte
 cap and remembered failures still throw. Outside the tenant's request (job,
 mail) mint through a pinned generator:
 `$derivatives->withProxyUrls($hmac->forScope($tenantId))->urlFor(...)` (also
-for `Srcset::for()`); core's `Storage::urlFor()` has no such hook.
+for `Srcset::for()`); core 0.10's `Storage::withProxyUrls()` does the same for
+originals (concrete `Storage`, `-db`'s `DeduplicatingStorage` 0.4+).
 
 `Derivatives` implements core's `Store\DerivativeResolverInterface` —
 `stream()`/`descriptor()` are that contract; `-web`'s download action serves
@@ -196,7 +199,9 @@ printed even when the run dies and names the last file whose presets were all
 attempted. Exit 1 only when a generation *failed*
 (unsupported sources are skips; any other `Exception` of one rendition is one
 failure, the run goes on). Needs
-`MaintenanceRepositoryInterface`.
+`MaintenanceRepositoryInterface`; under tenancy that takes `-db`'s
+`globalMaintenanceAccess` param, and then the command walks every tenant's
+files (set it in the console config only).
 
 ## DI (config-plugin)
 

@@ -82,12 +82,19 @@ final readonly class GdImageProcessor implements ImageProcessorInterface
         }
 
         $bytes = SourceGuard::readBounded($source, $this->maxSourceBytes);
-        [$sourceWidth, $sourceHeight] = SourceGuard::dimensions($bytes, $this->maxSourcePixels);
+        SourceGuard::dimensions($bytes, $this->maxSourcePixels);
 
         $image = @imagecreatefromstring($bytes);
         if (!$image instanceof GdImage) {
             throw new ProcessingFailedException('GD could not decode the source image');
         }
+
+        // The decoded image, not the header: libgd decodes a GIF's first frame
+        // at the frame's size, which may be smaller than the logical screen
+        // the header guard reports — sizing from the screen cropped a region
+        // the image does not have.
+        $sourceWidth = max(1, imagesx($image));
+        $sourceHeight = max(1, imagesy($image));
 
         $target = TargetSize::calculate($sourceWidth, $sourceHeight, $preset);
         $canvas = $this->canvas($target, $preset->format);
@@ -125,8 +132,8 @@ final readonly class GdImageProcessor implements ImageProcessorInterface
         }
 
         if ($format->supportsAlpha()) {
-            imagealphablending($canvas, false);
-            imagesavealpha($canvas, true);
+            imagealphablending($canvas, enable: false);
+            imagesavealpha($canvas, enable: true);
             $background = imagecolorallocatealpha($canvas, 0, 0, 0, 127);
         } else {
             // JPEG has no alpha channel; a transparent source composites onto

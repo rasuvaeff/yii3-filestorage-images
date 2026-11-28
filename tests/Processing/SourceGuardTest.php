@@ -8,10 +8,12 @@ use Nyholm\Psr7\Factory\Psr17Factory;
 use Rasuvaeff\Yii3FilestorageImages\Exception\ProcessingFailedException;
 use Rasuvaeff\Yii3FilestorageImages\Exception\UnsupportedSourceException;
 use Rasuvaeff\Yii3FilestorageImages\Processing\SourceGuard;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Gif;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Png;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\StallingStream;
 use Testo\Assert;
 use Testo\Codecov\Covers;
+use Testo\Data\DataProvider;
 use Testo\Expect;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
@@ -143,5 +145,93 @@ final class SourceGuardTest
         Expect::exception(ProcessingFailedException::class)->withMessageContaining('could not be established');
 
         SourceGuard::dimensions('this is not an image', maxPixels: 0);
+    }
+
+    /**
+     * Core review pass 2, N1, in this package: `getimagesizefromstring()`
+     * reports a GIF's logical screen, and every frame carries its own size —
+     * the one a decoder allocates. A 1x1 screen passed a 1 MP cap with an
+     * 8000x8000 frame behind it. A frame that does not fit inside its screen
+     * is refused, so the screen bounds every frame and the cap holds.
+     */
+    public function aGifFrameLargerThanItsScreenIsRefused(): void
+    {
+        Expect::exception(UnsupportedSourceException::class)
+            ->withMessageContaining('GIF frame 8000x8000 at (0,0) does not fit its 1x1 logical screen');
+
+        SourceGuard::dimensions(Gif::screen1x1Frame64mp(), maxPixels: 1_000_000);
+    }
+
+    /**
+     * @return iterable<string, array{array{int, int, int, int}}>
+     */
+    public static function frameOutsideTheScreenProvider(): iterable
+    {
+        yield 'wider' => [[0, 0, 101, 10]];
+        yield 'taller' => [[0, 0, 10, 101]];
+        yield 'pushed right' => [[95, 0, 6, 10]];
+        yield 'pushed down' => [[0, 95, 10, 6]];
+    }
+
+    #[DataProvider('frameOutsideTheScreenProvider')]
+    public function aGifFrameOutsideItsScreenIsRefused(array $frame): void
+    {
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('100x100 logical screen');
+
+        SourceGuard::dimensions(Gif::of(100, 100, [[0, 0, 100, 100], $frame]), maxPixels: 0);
+    }
+
+    public function aGifWhoseFramesFitIsMeasuredByItsScreen(): void
+    {
+        $gif = Gif::of(100, 80, [
+            "!\xFF\x0BNETSCAPE2.0\x03\x01\x00\x00\x00",
+            [0, 0, 100, 80],
+            [10, 10, 90, 70],
+            "!\xFE\x05hello\x00",
+            [99, 79, 1, 1],
+        ]);
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 8000), [100, 80]);
+    }
+
+    /**
+     * ImageMagick and libgd read a byte that starts no block, skip it and
+     * read the next: a frame hidden behind such a byte is still decoded, so
+     * the walk goes on to it the same way.
+     */
+    public function aFrameBehindAStrayByteIsStillChecked(): void
+    {
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('4000x4000');
+
+        SourceGuard::dimensions(Gif::of(10, 10, [[0, 0, 10, 10], "\x00\x07", [0, 0, 4000, 4000]]), maxPixels: 0);
+    }
+
+    /**
+     * A file cut short after a frame that fits decodes as far as it goes;
+     * so does the walk.
+     */
+    public function aGifCutShortAfterAFrameIsMeasured(): void
+    {
+        $gif = substr(Gif::of(20, 20, [[0, 0, 20, 20], [0, 0, 20, 20]], trailer: ''), 0, -3);
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [20, 20]);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function unmeasurableGifProvider(): iterable
+    {
+        yield 'no frame' => [Gif::of(20, 20, [])];
+        yield 'a zero-width frame' => [Gif::of(20, 20, [[0, 0, 0, 20]])];
+        yield 'a frame descriptor cut short' => [Gif::of(20, 20, [",\x00\x00\x00"], trailer: '')];
+    }
+
+    #[DataProvider('unmeasurableGifProvider')]
+    public function aGifWithoutAMeasurableFrameIsRefused(string $gif): void
+    {
+        Expect::exception(ProcessingFailedException::class)->withMessageContaining('could not be established');
+
+        SourceGuard::dimensions($gif, maxPixels: 0);
     }
 }

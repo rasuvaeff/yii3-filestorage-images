@@ -296,6 +296,35 @@ final class GdImageProcessorTest
         Assert::true(\strlen((string) $thorough->stream) < \strlen((string) $sparse->stream));
     }
 
+    /**
+     * libgd decodes a GIF's first frame at the frame's own size, not the
+     * logical screen's. Sizing the output from the screen (what the header
+     * guard reports) cropped a 10x10 frame as if it were 100x100 and
+     * stretched it into a 50x50 thumbnail of mostly nothing; ImageMagick
+     * already measures the decoded frame.
+     */
+    public function aGifFrameSmallerThanItsScreenIsSizedByTheFrame(): void
+    {
+        $this->requireExtension();
+        $frame = imagecreatetruecolor(10, 10);
+        imagefill($frame, 0, 0, (int) imagecolorallocate($frame, 200, 100, 50));
+        ob_start();
+        imagegif($frame);
+        $gif = (string) ob_get_clean();
+        $gif = substr_replace($gif, pack('vv', 100, 100), 6, 4);
+        $descriptor = strpos($gif, ',', 13);
+        Assert::true($descriptor !== false);
+        $gif = substr_replace($gif, pack('vv', 5, 5), $descriptor + 1, 4);
+
+        $processed = (new GdImageProcessor(new Psr17Factory()))->process(
+            (new Psr17Factory())->createStream($gif),
+            'image/gif',
+            new Preset(name: 'out', format: Format::Png, width: 50, height: 50),
+        );
+
+        Assert::same([$processed->width, $processed->height], [10, 10]);
+    }
+
     private function requireExtension(): void
     {
         if (!\extension_loaded('gd')) {
@@ -332,8 +361,8 @@ final class GdImageProcessorTest
     private function transparentPngSource(int $width, int $height): \Psr\Http\Message\StreamInterface
     {
         $image = imagecreatetruecolor($width, $height);
-        imagealphablending($image, false);
-        imagesavealpha($image, true);
+        imagealphablending($image, enable: false);
+        imagesavealpha($image, enable: true);
         imagefill($image, 0, 0, (int) imagecolorallocatealpha($image, 0, 0, 0, 127));
 
         ob_start();

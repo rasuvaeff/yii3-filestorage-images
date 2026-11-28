@@ -10,6 +10,8 @@
         "imagecolorallocatealpha",
         "imagefill",
         "imagecopyresampled",
+        "imagesx",
+        "imagesy",
         "imagejpeg",
         "imagepng",
         "imagewebp",
