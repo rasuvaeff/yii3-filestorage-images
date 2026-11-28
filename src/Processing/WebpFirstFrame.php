@@ -160,7 +160,9 @@ final readonly class WebpFirstFrame
     }
 
     /**
-     * @return int<0, 16777215>
+     * @return int<0, max> Three bytes, so at most 0xFFFFFF; psalm 7.0 (the
+     *         prefer-lowest job) cannot carry the upper bound through the
+     *         shifts, so only the sign is declared.
      */
     private static function uint24(string $bytes, int $offset): int
     {
