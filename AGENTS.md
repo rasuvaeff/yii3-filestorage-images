@@ -85,19 +85,37 @@ does. Run `make test-images` whenever a processor changes.
   limits are process-wide: only lowered, only around the read, restored in
   `finally`; AREA/MEMORY are not used — past them IM 7 spills to disk instead
   of refusing. LISTLENGTH must be 2, not 1 (IM refuses a list reaching it).
+  The narrowing is skipped under ZTS (`PHP_ZTS`): the limits are shared by
+  every thread (review 1.0 pass 2, N9).
+- **ImageMagick's WebP coder ignores `[0]`** and decodes every frame
+  (measured, pass 2 N2). An animated WebP is cut down to its first `ANMF`
+  frame by `Processing\WebpFirstFrame` (container walk, no decoding) and
+  decoded as a still, then placed on its canvas. Never "fix" it by raising
+  LISTLENGTH: that decodes the whole animation under a cap that measures one
+  frame.
 - **ImageMagick `PolicyError` (code 499) is `UnsupportedSourceException`**
   (`Processing\ImagickFailure`), tested in a child process with
   `MAGICK_CONFIGURE_PATH` (`tests/Support/ImagickPolicy.php`): the policy is
   read once at start-up.
-- **The PDF page geometry is the largest MediaBox in the file**, even for a
-  `[0]` ping — ImageMagick scans the whole file before ghostscript runs. An
-  upper bound, pinned by `theRenderGeometryIsTheLargestPageBoxInTheDocument`.
-- **Failure cache.** Only `UnsupportedSourceException`,
+- **The PDF ping is not a bound.** ImageMagick reads the page box from the
+  file's raw text: the largest direct MediaBox (pinned by
+  `theRenderGeometryIsTheLargestPageBoxInTheDocument`), blind to an indirect
+  `/MediaBox`, compressed object streams and `/UserUnit` (pass 2 N1: a 6000 pt
+  page pinged as letter, OOM-killed a 1 GB worker). The bound is
+  `setOption('pdf:fit-page', '<ping w>x<ping h>')` (geometry in points; works
+  on IM 6.9 and 7) plus `assertWithin()` after the read. Never drop either.
+- **Failure cache.** Only `UnsupportedSourceException`, a non-transient
   `ProcessingFailedException` and core's `SizeLimitExceededException` from
-  `process()`/`writeDerivative()` are remembered — never a missing original or
-  a `StoreException`. Checked before the lock, after losing it, and under it.
-  Key: hex sha256 of store, rendition path, `updatedAt`, content hash (PSR-16
-  reserves `:`).
+  `process()`/`writeDerivative()` are remembered — never a missing original, a
+  `StoreException` or `ProcessingFailedException::transient()` (stalled
+  stream, spool, GD allocation/encode, ImageMagick codes other than
+  CorruptImage/Coder 325/350/425/450 — `ImagickFailure`). Checked before the
+  lock, after losing it, and under it. Every cache call is wrapped: a throwing
+  cache is a miss / no-op (pass 2 N7). Key: `fsimg.failed.` + 48 hex of sha256
+  of store, rendition path, `updatedAt`, content hash — 61 chars, PSR-16
+  portable (≤ 64, no `:`, no `-`).
+- `filestorage:warm` sets `Last id` only after all presets of a file were
+  attempted (pass 2 N16).
 - `FlysystemStore` does not implement `DerivativeAwareStoreInterface` — keep
   every doc saying so (README EN/RU, llms.txt, SKILL.md; review 1.0 A6).
 - `ThrowWithPreviousExceptionRector` is skipped in `rector.php`: it adds

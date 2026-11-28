@@ -59,7 +59,10 @@ capability. Namespace `Rasuvaeff\Yii3FilestorageImages\`. Full API reference:
   repository).
 - Optional `Psr\SimpleCache\CacheInterface` — remembers failed generations
   for `failureTtl`; without it a source that always fails is decoded again on
-  every request. Never remember a missing original or a store error.
+  every request. Never remember a missing original, a store error or a
+  transient `ProcessingFailedException` (`isTransient()`: stalled stream,
+  spool, ImageMagick resource/delegate errors). A cache that throws is no
+  cache — never a 500.
 
 ## Serving
 
@@ -70,4 +73,6 @@ case the application serves `stream()` itself. Only the store-URL branches
 generate; the proxy URL is minted without generating (the proxy generates on
 its first request), but what can never be generated still throws. The `-web` download action
 serves variant tokens through `DerivativeResolverInterface`, which this package
-binds to `Derivatives`.
+binds to `Derivatives`. A URL minted outside the tenant's request (job, mail)
+goes through `$derivatives->withProxyUrls($hmacGenerator->forScope($tenantId))`
+— `Srcset::for()` over that facade too.

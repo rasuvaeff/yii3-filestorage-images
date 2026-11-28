@@ -32,9 +32,16 @@ integration is exercised against it.
   pixel cap, and a page over the cap at the 72-DPI baseline is refused before
   a pixel is allocated — the read itself selects page 0, so a hundred-page
   PDF costs one render, not a hundred. ImageMagick takes the page box from a
-  scan of the whole file, so the geometry is the *largest* page box in the
-  document: an upper bound (the render only comes out smaller), and one
-  oversized page refuses the preview. A `policy.xml` that forbids the PDF
+  scan of the file's raw text: it reports the *largest* direct box in the
+  document (one oversized page refuses the preview) and cannot see a box
+  given by an indirect reference, inside a compressed object stream, or
+  scaled by `/UserUnit`. The ping is therefore not trusted as a bound on its
+  own: ghostscript renders onto a fixed media of the pinged size
+  (`pdf:fit-page`, page scaled to fit), so the raster never exceeds the
+  geometry the DPI was chosen for, and a render that still came out larger
+  is refused before anything is encoded. A page whose real box differs from
+  the pinged one (a mixed-size document, a hidden box) is scaled into it and
+  letterboxed. A `policy.xml` that forbids the PDF
   coder (Debian's default) surfaces as `UnsupportedSourceException`. Video posters stay
   out: no ffmpeg in the dependency graph, by the same honesty.
 - **Presets, never free-form dimensions.** Every derivative this installation
@@ -166,6 +173,7 @@ final readonly class AvatarPresenter
 | `urlFor(File $file, string $preset, ?DateTimeImmutable $expiresAt = null): ?string` | Policy-gated URL: direct public → store-native temporary → signed proxy (`-web`) → `null`. Generates only for a store URL; still refuses what can never be generated (unsupported source, over the byte cap, a remembered failure) |
 | `exists(File $file, string $preset): bool` | Pure probe, never generates |
 | `descriptor(string $preset): DerivativeDescriptor` | The physical identity (`thumb-v1.webp`) a store addresses the rendition by |
+| `withProxyUrls(?ProxyUrlGeneratorInterface $proxyUrls): self` | The same facade minting proxy URLs through another generator — e.g. one pinned to a tenant with `-web`'s `forScope()` for URLs minted outside its request |
 
 The watermark recipe ships as an example (`examples/watermark-decorator.php`):
 the mark belongs to the *original*, stamped at upload — every derivative
@@ -203,6 +211,15 @@ A file whose path does not fit its store's layout (a
 store): the store is misconfigured, not the request. Malformed preset config throws
 `InvalidPresetException` at container build time, naming the offending key.
 
+**URLs minted outside the tenant's request.** The signed proxy URL carries
+the scope the bound generator reads from the *current* request. A URL minted
+in a queue job or a mail, for a tenant's file, needs a generator pinned to
+that tenant: `$derivatives->withProxyUrls($hmacGenerator->forScope($tenantId))`
+(`-web`'s `HmacProxyUrlGenerator::forScope()`) returns the same facade minting
+through it, and `Srcset::for()` over that facade does the same. Core's
+`Storage::urlFor()` has no such hook: for originals, enter the tenant's
+context (see `-web`'s README) or call the pinned generator directly.
+
 ### Failed generations are remembered
 
 A source that always fails — it does not decode, it is over a guard, its
@@ -213,9 +230,17 @@ application binds a PSR-16 `CacheInterface`, the failure is remembered for
 lock, the read or the processor, and a request that waited for the lock sees
 the winner's failure instead of decoding the same bytes again. The entry is
 keyed by the physical rendition and the original's version (`updatedAt`,
-content hash), so a re-upload is tried at once. A missing original or a store
-error is never remembered — it may be gone a second later. Without a bound
-cache nothing is remembered.
+content hash), so a re-upload is tried at once. A missing original, a store
+error or a transient processing failure is never remembered — it may be gone
+a second later: a stalled source stream, a temporary file that could not be
+written, ImageMagick out of a resource under load, a delegate (ghostscript)
+that failed. Only ImageMagick's CorruptImage and Coder errors, GD's refusal to
+decode, the byte/pixel guards and an output over `maxBytes` are verdicts on
+the file (`ProcessingFailedException::isTransient()` tells them apart). The
+cache is optional in the strong sense: one that throws (Redis down) is a miss
+on read and a no-op on write, never the reason a rendition is not served.
+Keys are 61 characters of `[a-z0-9.]`, inside what PSR-16 guarantees. Without
+a bound cache nothing is remembered.
 
 A request waits `lockTimeout` (default 10 s) for another one's generation of
 the same rendition — it holds a worker meanwhile; `filestorage:warm` waits
@@ -232,7 +257,9 @@ Additive and idempotent — existing renditions are counted, not regenerated.
 Unsupported files (non-images in a mixed bucket) are skips, not failures; any
 other exception of one rendition — a layout's, a mutex driver's — is one
 failure and the run goes on. `Last id:` is printed even when the run dies, so
-`--after` can resume.
+`--after` can resume; it names the last file whose presets were all
+attempted, so a run that dies between one file's presets resumes at that
+file.
 Requires the backend to implement the core `MaintenanceRepositoryInterface`
 (the `-db` repository does).
 
@@ -270,6 +297,7 @@ polyglots at the cost of not preserving the uploaded bytes.
 |---|---|---|
 | EXIF auto-orientation | no — a sideways phone photo stays sideways | yes, before geometry |
 | Animated GIF | flattened to the first frame | first frame only — `[0]` is selected at read time, later frames are never decoded |
+| Animated WebP | not decoded (libgd reads stills only) — `ProcessingFailedException` | first frame only — cut out of the container as a still before decoding (ImageMagick's WebP coder ignores `[0]`) |
 | Metadata in output | stripped by construction | stripped explicitly |
 | Format support | compile-time (`imagetypes()` is asked per call) | build-dependent (`queryFormats()` is asked per call) |
 
@@ -282,7 +310,11 @@ the frame — a 1×1 screen over a 4000×4000 frame passed the header guard);
 the coder is the detected media type's, never ImageMagick's guess from the
 bytes; and ImageMagick's width/height/list-length limits are narrowed to the
 pinged frame for the read and put back after it (process-wide state, only
-ever lowered).
+ever lowered). Those limits are shared by every thread of a process, so under
+a threaded (ZTS) runtime — FrankenPHP, a threaded RoadRunner plugin — the
+narrowing is skipped, rather than let one thread's read refuse another's; the
+first-frame selection and the ping guards still apply. Animated AVIF
+sequences are untested.
 
 ## Security
 

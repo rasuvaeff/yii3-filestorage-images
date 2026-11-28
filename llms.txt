@@ -50,11 +50,19 @@ ImageMetadataStorage($s)`.
   Imagick also pings frame `[0]` with the coder of the detected media type
   (never IM's sniffing) and checks the frame and its canvas (GIF logical
   screen can be smaller than the frame), reads only `[0]`, and narrows IM's
-  WIDTH/HEIGHT/LISTLENGTH limits for the read (restored after; only lowered).
+  WIDTH/HEIGHT/LISTLENGTH limits for the read (restored after; only lowered;
+  skipped under ZTS, where the limits are shared between threads). Animated
+  WebP: the first `ANMF` frame is cut out of the RIFF container as a still
+  before decoding (IM's WebP coder ignores `[0]`); a malformed container is a
+  `ProcessingFailedException`.
 - Failed generations (decode failure, guard refusal, output over `maxBytes`)
   are remembered for `failureTtl` when a PSR-16 cache is bound; keyed by the
-  rendition path + original `updatedAt`/content hash. Missing originals and
-  store errors are never remembered. A remembered failure is rethrown with its
+  rendition path + original `updatedAt`/content hash (key ≤ 64 chars, PSR-16
+  portable). Missing originals, store errors and transient processing
+  failures (`ProcessingFailedException::isTransient()`: stalled stream, spool
+  failure, IM resource/cache/delegate errors — only CorruptImage/Coder errors
+  are about the file) are never remembered. A cache that throws is a miss on
+  read and a no-op on write. A remembered failure is rethrown with its
   kind (unsupported → `UnsupportedSourceException`, decode →
   `ProcessingFailedException`, size → `DerivativeGenerationException`).
 - SVG is never processed into raster variants; use `SvgSanitizerInterface` at
@@ -97,6 +105,7 @@ public function stream(File $file, string $presetName): ?StreamInterface; // laz
 public function urlFor(File $file, string $presetName, ?DateTimeImmutable $expiresAt = null): ?string;
 public function exists(File $file, string $presetName): bool;        // pure probe
 public function descriptor(string $presetName): DerivativeDescriptor; // e.g. thumb-v1.webp
+public function withProxyUrls(?ProxyUrlGeneratorInterface $proxyUrls): self; // same facade, another generator
 ```
 
 `urlFor()` order: direct public URL (only when the group's `DeliveryPolicy`
@@ -104,7 +113,10 @@ has `allowDirectPublicUrl`) → store-native temporary URL → signed proxy URL
 (when yii3-filestorage-web is installed; the variant is inside the HMAC) →
 `null` (serve the stream yourself). Generates only for the store-URL branches;
 the proxy URL is minted without generating, but unsupported sources, the byte
-cap and remembered failures still throw.
+cap and remembered failures still throw. Outside the tenant's request (job,
+mail) mint through a pinned generator:
+`$derivatives->withProxyUrls($hmac->forScope($tenantId))->urlFor(...)` (also
+for `Srcset::for()`); core's `Storage::urlFor()` has no such hook.
 
 `Derivatives` implements core's `Store\DerivativeResolverInterface` —
 `stream()`/`descriptor()` are that contract; `-web`'s download action serves
@@ -155,7 +167,8 @@ interface ImageProcessorInterface {
   the shared pure geometry (output canvas + centered crop window).
 - Imagick applies EXIF orientation and strips metadata; GD does neither
   orientation nor keeps metadata. Animated GIFs become their first frame
-  (Imagick decodes only frame `[0]`).
+  (Imagick decodes only frame `[0]`); animated WebP too under Imagick (GD
+  cannot decode animated WebP).
 
 ### SVG (`…\Svg`)
 
@@ -179,7 +192,8 @@ filestorage:warm [--preset=NAME]... [--after=FILE_ID] [--limit=N]
 
 Pre-generates through `Derivatives::ensure()` (the same locked path as lazy,
 waiting `warmLockTimeout`). Idempotent, resumable via `--after`; `Last id:` is
-printed even when the run dies. Exit 1 only when a generation *failed*
+printed even when the run dies and names the last file whose presets were all
+attempted. Exit 1 only when a generation *failed*
 (unsupported sources are skips; any other `Exception` of one rendition is one
 failure, the run goes on). Needs
 `MaintenanceRepositoryInterface`.
@@ -201,7 +215,10 @@ plumbing). Imagick + the ghostscript delegate only; without the delegate the
 combination is reported unsupported, like AVIF. Render DPI =
 72*sqrt(maxSourcePixels/baselinePoints2) (<=150); a page over the cap at the
 72-DPI baseline is refused before a pixel is allocated. ImageMagick takes
-the page box from a scan of the whole file, so the measured geometry is the
-largest page box in the document (upper bound; one oversized page refuses the
-preview). A `policy.xml` forbidding PDF → `UnsupportedSourceException`. `make test-images`
+the page box from a scan of the file's raw text: the largest direct box in the
+document (one oversized page refuses the preview), blind to an indirect
+`/MediaBox`, a compressed object stream and `/UserUnit`. The render is bounded
+anyway: `pdf:fit-page` = pinged geometry (ghostscript `-dFIXEDMEDIA
+-dPDFFitPage`, page scaled to fit, letterboxed if its real box differs), and a
+raster larger than pinged geometry × DPI is an `UnsupportedSourceException`. A `policy.xml` forbidding PDF → `UnsupportedSourceException`. `make test-images`
 installs ghostscript, so CI runs the PDF suite.
