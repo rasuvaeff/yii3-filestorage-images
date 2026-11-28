@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.9.0 — 2026-11-28
+
+Pre-1.0 review fixes (#23).
 
 - **Changed (BC break, pre-1.0):** requires `rasuvaeff/yii3-filestorage` `^0.10`; serving variant tokens takes `rasuvaeff/yii3-filestorage-web` 0.7+. This release no longer installs with core 0.9; stay on 0.8.0 for it. New runtime dependency `psr/simple-cache` (interface only).
 - **Security (review 1.0 A4):** `ImagickImageProcessor` no longer decodes every frame of an animation before keeping the first, and no longer trusts the header size of a GIF whose logical screen is smaller than its frame. The first frame is pinged with the coder of the detected media type (never ImageMagick's own sniffing) and both the frame and its canvas are checked against `maxSourcePixels`; only frame `[0]` is read, with ImageMagick's width/height/list-length limits narrowed to the pinged frame for the read and restored after it. A GIF with a 1×1 screen over a 4000×4000 frame, and a 30-frame 1 MP animation under a 2 MP cap, are now refused / decoded as one frame. A source whose bytes are another format than its media type is a `ProcessingFailedException`.
