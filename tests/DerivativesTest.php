@@ -791,6 +791,31 @@ final class DerivativesTest
         $this->derivatives(proxyUrls: new SignedProxyUrlGenerator(), failures: $cache)->urlFor($file, 'thumb');
     }
 
+    /**
+     * @return iterable<string, array{mixed}>
+     */
+    public static function malformedEntryProvider(): iterable
+    {
+        yield 'not an array' => ['unsupported'];
+        yield 'kind is not a string' => [['kind' => 1, 'message' => 'broken']];
+        yield 'message is not a string' => [['kind' => 'failed', 'message' => 1]];
+    }
+
+    /**
+     * Whatever else shares the cache, an entry that is not one this facade
+     * wrote is a miss: the rendition is generated, not refused.
+     */
+    #[DataProvider('malformedEntryProvider')]
+    public function aMalformedCacheEntryIsAMiss(mixed $entry): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $cache = Understudy::for(CacheInterface::class);
+        when(fn() => $cache->get(Arg::any(), Arg::any()))->returns($entry);
+
+        Assert::true($this->derivatives(failures: $cache)->ensure($file, 'thumb'));
+    }
+
     private function brokenCache(): CacheInterface
     {
         $cache = Understudy::for(CacheInterface::class);
@@ -798,6 +823,80 @@ final class DerivativesTest
         when(fn() => $cache->set(Arg::any(), Arg::any(), Arg::any()))->throws(new \RuntimeException('cache is down'));
 
         return $cache;
+    }
+
+    /**
+     * An existing rendition is served whatever this installation could
+     * generate today: no processor is consulted, no lock taken.
+     */
+    public function anExistingRenditionIsServedWithoutAProcessorForIt(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $this->processor = Doubles::processor(supports: false);
+        $derivatives = $this->derivatives();
+        $this->store->putDerivative($file, $derivatives->descriptor('thumb'), 'generated earlier');
+
+        Assert::false($derivatives->ensure($file, 'thumb'));
+        verify(fn() => $this->mutexes->create(Arg::any()), never: true);
+    }
+
+    /**
+     * A store-native URL points at an object, it does not generate one: the
+     * rendition exists before the URL is handed out.
+     */
+    public function aStoreUrlIsMintedForAGeneratedRendition(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $derivatives = $this->derivatives(stores: new StoreRegistry([new DerivativeUrlMemoryStore($this->store)]));
+
+        Assert::string((string) $derivatives->urlFor($file, 'thumb'))->contains('signed.example.test');
+        Assert::true($derivatives->exists($file, 'thumb'));
+    }
+
+    /**
+     * The documented key: `fsimg.failed.` and 48 hex of the sha256 over the
+     * store, the rendition path, the original's `updatedAt` and its content
+     * hash — an operator can compute it to clear one entry.
+     */
+    public function theFailureKeyNamesTheRenditionAndTheOriginalsVersion(): void
+    {
+        $file = File::create(
+            id: 'file-1',
+            storeName: 'memory',
+            groupName: 'common',
+            relativePath: 'common/ab/cd/file-1/original.png',
+            originalName: 'photo.png',
+            size: 1024,
+            createdAt: Fixtures::now(),
+            mimeType: 'image/png',
+            contentHash: self::SHA,
+        );
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $cache = new SimpleCacheActionLogger(new MemorySimpleCache());
+        $derivatives = $this->derivatives(
+            processor: Doubles::failingProcessor(new ProcessingFailedException('broken')),
+            failures: $cache,
+        );
+
+        try {
+            $derivatives->ensure($file, 'thumb');
+        } catch (ProcessingFailedException) {
+        }
+
+        $sets = array_values(array_filter(
+            $cache->getActions(),
+            static fn(Action $action): bool => $action->getAction() === Action::SET,
+        ));
+        $expected = 'fsimg.failed.' . substr(hash('sha256', implode("\0", [
+            'memory',
+            $this->store->layout()->derivativePath($file, $derivatives->descriptor('thumb')),
+            $file->updatedAt->format('U.u'),
+            self::SHA,
+        ])), 0, 48);
+        Assert::same(\count($sets), 1);
+        Assert::same($sets[0]->getKey(), $expected);
     }
 
     private function derivatives(
