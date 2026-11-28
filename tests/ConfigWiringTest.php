@@ -6,6 +6,7 @@ namespace Rasuvaeff\Yii3FilestorageImages\Tests;
 
 use Psr\Clock\ClockInterface;
 use Psr\Http\Message\StreamFactoryInterface;
+use Psr\SimpleCache\CacheInterface;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
 use Rasuvaeff\Yii3Filestorage\Repository\MaintenanceRepositoryInterface;
 use Rasuvaeff\Yii3Filestorage\Repository\RepositoryInterface;
@@ -34,6 +35,7 @@ use Yiisoft\Di\Container;
 use Yiisoft\Di\ContainerConfig;
 use Yiisoft\Mutex\MutexFactoryInterface;
 use Yiisoft\Test\Support\Clock\StaticClock;
+use Yiisoft\Test\Support\SimpleCache\MemorySimpleCache;
 
 /**
  * `config/di.php` is covered by neither cs, nor psalm, nor the unit suite — it
@@ -82,6 +84,33 @@ final class ConfigWiringTest
 
         $withoutProxy = new Container(ContainerConfig::create()->withDefinitions($this->definitions() + $this->serviceDoubles()));
         Assert::null($proxy->getValue($withoutProxy->get(Derivatives::class)));
+    }
+
+    /**
+     * The failure cache is optional the same way: the application's PSR-16
+     * cache flows in when bound, with the shipped TTL; nothing otherwise. And
+     * `warm` gets its own, longer lock wait.
+     */
+    public function theFailureCacheFlowsInWhenBoundAndWarmWaitsLonger(): void
+    {
+        $cache = new MemorySimpleCache();
+        $definitions = $this->definitions() + $this->serviceDoubles();
+        $definitions[CacheInterface::class] = static fn(): CacheInterface => $cache;
+        $with = new Container(ContainerConfig::create()->withDefinitions($definitions));
+
+        $failures = new ReflectionProperty(Derivatives::class, 'failures');
+        $ttl = new ReflectionProperty(Derivatives::class, 'failureTtl');
+        $lock = new ReflectionProperty(Derivatives::class, 'lockTimeoutSeconds');
+        $derivatives = $with->get(Derivatives::class);
+        Assert::same($failures->getValue($derivatives), $cache);
+        Assert::same($ttl->getValue($derivatives)->i, 5);
+        Assert::same($lock->getValue($derivatives), 10);
+        Assert::same((new ReflectionProperty(WarmCommand::class, 'lockTimeoutSeconds'))->getValue(
+            $with->get(WarmCommand::class),
+        ), 60);
+
+        $without = new Container(ContainerConfig::create()->withDefinitions($this->definitions() + $this->serviceDoubles()));
+        Assert::null($failures->getValue($without->get(Derivatives::class)));
     }
 
     public function shippedPresetParamsBuildTheDocumentedShape(): void
@@ -133,7 +162,7 @@ final class ConfigWiringTest
         $own = $this->params()['rasuvaeff/yii3-filestorage-images'];
 
         foreach ([
-            'presets', 'defaultUrlTtl', 'lockTimeout', 'maxSourceBytes', 'maxSourcePixels', 'svg',
+            'presets', 'defaultUrlTtl', 'lockTimeout', 'warmLockTimeout', 'failureTtl', 'maxSourceBytes', 'maxSourcePixels', 'svg',
         ] as $key) {
             Assert::true(\array_key_exists($key, $own), "params is missing \"{$key}\"");
         }

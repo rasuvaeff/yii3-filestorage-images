@@ -16,6 +16,7 @@ use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Png;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\TrickleStream;
 use Testo\Assert;
 use Testo\Codecov\Covers;
+use Testo\Data\DataProvider;
 use Testo\Test;
 
 use function Rasuvaeff\Understudy\when;
@@ -119,6 +120,29 @@ final class ImageMetadataStorageTest
         Assert::true($decorated->exists(Fixtures::file()));
         Assert::true($decorated->remove('file-1'));
         Assert::same($decorated->content(Fixtures::file()), 'x');
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function indeterminateSizeProvider(): iterable
+    {
+        yield 'zero width' => [Png::header(0, 200)];
+        yield 'zero height' => [Png::header(320, 0)];
+    }
+
+    /**
+     * A side PHP reports as zero is indeterminate, not a dimension: nothing
+     * is recorded, and the caller's metadata passes through as it was.
+     */
+    #[DataProvider('indeterminateSizeProvider')]
+    public function anIndeterminateSideRecordsNoDimensions(string $header): void
+    {
+        $storage = $this->inner();
+
+        $this->decorated($storage)->add($this->upload($header), metadata: ['k' => 'v']);
+
+        Assert::same($this->capturedMetadata($storage), ['k' => 'v']);
     }
 
     private function decorated(StorageInterface $inner): ImageMetadataStorage

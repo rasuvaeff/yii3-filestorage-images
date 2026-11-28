@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace Rasuvaeff\Yii3FilestorageImages\Tests;
 
 use DateInterval;
+use Psr\SimpleCache\CacheInterface;
 use Rasuvaeff\Understudy\Arg;
+use Rasuvaeff\Understudy\Understudy;
+use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
+use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeResolverInterface;
 use Rasuvaeff\Yii3Filestorage\Store\FileSystem\FileSystemStore;
@@ -16,6 +20,7 @@ use Rasuvaeff\Yii3Filestorage\Test\InMemoryStore;
 use Rasuvaeff\Yii3Filestorage\Url\ProxyUrlGeneratorInterface;
 use Rasuvaeff\Yii3FilestorageImages\Derivatives;
 use Rasuvaeff\Yii3FilestorageImages\Exception\DerivativeGenerationException;
+use Rasuvaeff\Yii3FilestorageImages\Exception\ProcessingFailedException;
 use Rasuvaeff\Yii3FilestorageImages\Exception\UnknownPresetException;
 use Rasuvaeff\Yii3FilestorageImages\Exception\UnsupportedSourceException;
 use Rasuvaeff\Yii3FilestorageImages\Format;
@@ -38,8 +43,12 @@ use Yiisoft\Files\FileHelper;
 use Yiisoft\Mutex\MutexFactoryInterface;
 use Yiisoft\Mutex\MutexInterface;
 use Yiisoft\Test\Support\Clock\StaticClock;
+use Yiisoft\Test\Support\SimpleCache\Action;
+use Yiisoft\Test\Support\SimpleCache\MemorySimpleCache;
+use Yiisoft\Test\Support\SimpleCache\SimpleCacheActionLogger;
 
 use function Rasuvaeff\Understudy\verify;
+use function Rasuvaeff\Understudy\when;
 
 #[Test]
 #[Covers(Derivatives::class)]
@@ -188,7 +197,7 @@ final class DerivativesTest
         [$this->mutexes, $this->mutex] = Doubles::mutexes(acquirable: false);
 
         Expect::exception(DerivativeGenerationException::class)
-            ->withMessageContaining('Could not acquire the generation lock for "thumb-v1.webp" of file "file-1" within 30s');
+            ->withMessageContaining('Could not acquire the generation lock for "thumb-v1.webp" of file "file-1" within 10s');
 
         $this->derivatives()->ensure($file, 'thumb');
     }
@@ -277,9 +286,9 @@ final class DerivativesTest
         $this->store->setObject($file->relativePath, 'original bytes');
 
         Assert::null($this->derivatives()->urlFor($file, 'thumb'));
-        // But the rendition was still generated — the caller's fallback is
-        // serving the stream itself.
-        Assert::true($this->derivatives()->exists($file, 'thumb'));
+        // Nothing generated either: no URL comes of it, and the caller's
+        // fallback — serving `stream()` — generates on its own.
+        Assert::false($this->derivatives()->exists($file, 'thumb'));
     }
 
     /**
@@ -410,12 +419,494 @@ final class DerivativesTest
         Assert::same($this->derivatives()->descriptor('thumb')->fileName(), 'thumb-v1.webp');
     }
 
+    /**
+     * Review 1.0 #10. A source that always fails — a decode error, a guard,
+     * output over the preset's cap — was re-read and re-decoded on every
+     * request, each one queueing behind the lock. With a cache bound the
+     * failure is remembered: the second request answers from it without the
+     * lock, the read or the processor.
+     */
+    public function aFailedGenerationIsRememberedAndNotRetried(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $this->processor = Doubles::failingProcessor(new ProcessingFailedException('does not decode'));
+        $derivatives = $this->derivatives(failures: new MemorySimpleCache());
+
+        foreach ([1, 2] as $attempt) {
+            try {
+                $derivatives->ensure($file, 'thumb');
+                Assert::fail("attempt {$attempt} must fail");
+            } catch (ProcessingFailedException $e) {
+                Assert::string($e->getMessage())->contains('does not decode');
+            }
+        }
+
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), times: 1);
+        verify(fn() => $this->mutexes->create(Arg::any()), times: 1);
+    }
+
+    /**
+     * Review 1.0 pass 2, N7: the failure cache is optional. A cache that
+     * throws (Redis down) is a miss on read and a no-op on write — the
+     * rendition is generated and served, never a 500.
+     */
+    public function aBrokenFailureCacheIsNoCache(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        $this->derivatives(failures: $this->brokenCache())->ensure($file, 'thumb');
+
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), times: 1);
+    }
+
+    /** N7: a cache that fails on write does not replace the generation's own failure. */
+    public function aBrokenFailureCacheKeepsTheRealFailure(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        Expect::exception(ProcessingFailedException::class)->withMessageContaining('does not decode');
+
+        $this->derivatives(
+            processor: Doubles::failingProcessor(new ProcessingFailedException('does not decode')),
+            failures: $this->brokenCache(),
+        )->ensure($file, 'thumb');
+    }
+
+    /** N7: `urlFor()` consults the failure cache on its proxy path; a broken one is a miss there too. */
+    public function aBrokenFailureCacheStillMintsTheProxyUrl(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        $url = $this->derivatives(proxyUrls: new SignedProxyUrlGenerator(), failures: $this->brokenCache())
+            ->urlFor($file, 'thumb');
+
+        Assert::notNull($url);
+    }
+
+    /**
+     * Review 1.0 pass 2, N8: a failure that says nothing about the file — a
+     * stalled stream, a full disk, ImageMagick out of resources under load —
+     * is not remembered; the next request tries again.
+     */
+    public function aTransientFailureIsNotRemembered(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $this->processor = Doubles::failingProcessor(ProcessingFailedException::transient('stream stalled'));
+        $derivatives = $this->derivatives(failures: new MemorySimpleCache());
+
+        foreach ([1, 2] as $attempt) {
+            try {
+                $derivatives->ensure($file, 'thumb');
+                Assert::fail("attempt {$attempt} must fail");
+            } catch (ProcessingFailedException $e) {
+                Assert::true($e->isTransient(), "attempt {$attempt}");
+            }
+        }
+
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), times: 2);
+    }
+
+    /**
+     * Each verdict comes back as its own class: `warm` counts an unsupported
+     * source as a skip, and that must not turn into a failure on replay.
+     */
+    #[DataProvider('rememberedFailureProvider')]
+    public function aRememberedFailureKeepsItsKind(\Throwable $failure, string $replayed): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $this->processor = Doubles::failingProcessor($failure);
+        $derivatives = $this->derivatives(failures: new MemorySimpleCache());
+
+        foreach ([$failure::class, $replayed] as $attempt => $expected) {
+            try {
+                $derivatives->ensure($file, 'thumb');
+                Assert::fail("attempt {$attempt} must fail");
+            } catch (\Throwable $e) {
+                Assert::same($e::class, $expected, "attempt {$attempt}");
+            }
+        }
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), times: 1);
+    }
+
+    /**
+     * @return iterable<string, array{\Throwable, class-string}>
+     */
+    public static function rememberedFailureProvider(): iterable
+    {
+        yield 'a guard refusal' => [new UnsupportedSourceException('over the cap'), UnsupportedSourceException::class];
+        yield 'a decode failure' => [new ProcessingFailedException('broken'), ProcessingFailedException::class];
+        // The store's own class cannot be rebuilt from a cache entry; the
+        // replay is the package's generation failure (still a 404 in -web,
+        // still "failed" in warm).
+        yield 'output over the preset cap' => [
+            new UploadSizeException('rendition over 10 bytes'),
+            DerivativeGenerationException::class,
+        ];
+    }
+
+    /**
+     * A request that waited for the lock while the winner failed must not
+     * decode the same bytes again once it gets the lock.
+     */
+    public function aWaiterSeesTheWinnersFailureUnderTheLock(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $cache = new MemorySimpleCache();
+        $winner = $this->derivatives(
+            processor: Doubles::failingProcessor(new ProcessingFailedException('broken')),
+            failures: $cache,
+        );
+        $this->mutexes = Doubles::mutexesThatRunFirst(static function () use ($winner, $file): bool {
+            try {
+                $winner->ensure($file, 'thumb');
+            } catch (ProcessingFailedException) {
+            }
+
+            return true;
+        });
+
+        Expect::exception(ProcessingFailedException::class)->withMessageContaining('broken');
+
+        try {
+            $this->derivatives(failures: $cache)->ensure($file, 'thumb');
+        } finally {
+            verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), never: true);
+        }
+    }
+
+    /**
+     * A waiter that gives up on the lock reports the winner's failure, not a
+     * lock timeout that sends an operator looking at the mutex backend.
+     */
+    public function aWaiterThatLostTheLockReportsTheWinnersFailure(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $cache = new MemorySimpleCache();
+        $winner = $this->derivatives(
+            processor: Doubles::failingProcessor(new ProcessingFailedException('broken')),
+            failures: $cache,
+        );
+        $this->mutexes = Doubles::mutexesThatRunFirst(static function () use ($winner, $file): bool {
+            try {
+                $winner->ensure($file, 'thumb');
+            } catch (ProcessingFailedException) {
+            }
+
+            return false;
+        });
+
+        Expect::exception(ProcessingFailedException::class)->withMessageContaining('broken');
+
+        $this->derivatives(failures: $cache)->ensure($file, 'thumb');
+    }
+
+    /**
+     * Only verdicts about the bytes are remembered. A missing original or a
+     * store error may be gone a second later; caching it would turn a blip
+     * into a TTL of 404s for every thumbnail.
+     */
+    public function aMissingOriginalIsNotRemembered(): void
+    {
+        $file = Fixtures::file();
+        $cache = new MemorySimpleCache();
+        $derivatives = $this->derivatives(failures: $cache);
+
+        try {
+            $derivatives->ensure($file, 'thumb');
+            Assert::fail('the original is missing');
+        } catch (DerivativeGenerationException) {
+        }
+
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        Assert::true($derivatives->ensure($file, 'thumb'));
+    }
+
+    /**
+     * The entry names the original's version: a re-upload under the same
+     * path (a new `updatedAt`) is tried at once, not after the TTL.
+     */
+    public function aReplacedOriginalIsTriedAgainAtOnce(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $cache = new MemorySimpleCache();
+
+        try {
+            $this->derivatives(
+                processor: Doubles::failingProcessor(new ProcessingFailedException('broken')),
+                failures: $cache,
+            )->ensure($file, 'thumb');
+        } catch (ProcessingFailedException) {
+        }
+
+        $replaced = File::create(
+            id: $file->id,
+            storeName: $file->storeName,
+            groupName: $file->groupName,
+            relativePath: $file->relativePath,
+            originalName: $file->originalName,
+            size: $file->size,
+            createdAt: $file->createdAt,
+            mimeType: $file->mimeType,
+            updatedAt: $file->createdAt->modify('+1 minute'),
+        );
+
+        Assert::true($this->derivatives(failures: $cache)->ensure($replaced, 'thumb'));
+    }
+
+    /**
+     * The entry carries the configured TTL — remembered, not forever.
+     */
+    public function aRememberedFailureCarriesTheTtl(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $cache = new SimpleCacheActionLogger(new MemorySimpleCache());
+
+        try {
+            $this->derivatives(
+                processor: Doubles::failingProcessor(new ProcessingFailedException('broken')),
+                failures: $cache,
+                failureTtl: new DateInterval('PT2M'),
+            )->ensure($file, 'thumb');
+        } catch (ProcessingFailedException) {
+        }
+
+        $sets = array_values(array_filter(
+            $cache->getActions(),
+            static fn(Action $action): bool => $action->getAction() === Action::SET,
+        ));
+        Assert::same(\count($sets), 1);
+        Assert::instanceOf($sets[0]->getTtl(), DateInterval::class);
+        Assert::same($sets[0]->getTtl()->i, 2);
+        Assert::string((string) $sets[0]->getKey())->notContains(':');
+        // PSR-16 guarantees keys of up to 64 characters from A-Z a-z 0-9 _ .
+        // (review 1.0 pass 2, N15).
+        Assert::true(
+            preg_match('/^[A-Za-z0-9_.]{1,64}$/D', (string) $sets[0]->getKey()) === 1,
+            'not a portable PSR-16 key: ' . $sets[0]->getKey(),
+        );
+    }
+
+    /**
+     * The web path and `warm` wait differently: a request should not hold a
+     * worker for the batch job's patience.
+     */
+    public function ensureCanWaitLongerThanTheFacadesDefault(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $derivatives = $this->derivatives();
+
+        $derivatives->ensure($file, 'thumb', lockTimeoutSeconds: 120);
+
+        $waits = Arg::captor();
+        verify(fn() => $this->mutex->acquire($waits->capture()), times: 1);
+        Assert::same($waits->last(), 120);
+    }
+
+    /**
+     * Review 1.0 #12. The proxy route generates on its own first request, so
+     * minting one must not generate synchronously: a page of N images with M
+     * presets rendered N×M renditions before its first byte.
+     */
+    public function theProxyUrlIsMintedWithoutGenerating(): void
+    {
+        $proxy = new SignedProxyUrlGenerator();
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        $url = $this->derivatives(proxyUrls: $proxy)->urlFor($file, 'thumb');
+
+        Assert::string((string) $url)->contains("https://app.example.test/files/{$file->id}/thumb/");
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), never: true);
+        Assert::false($this->derivatives()->exists($file, 'thumb'));
+    }
+
+    /**
+     * Review 1.0 pass 2, N10: a URL minted outside the tenant's request (a
+     * job, a mail) needs a generator pinned to that tenant — `-web`'s
+     * `HmacProxyUrlGenerator::forScope()`. `withProxyUrls()` hands it to
+     * `urlFor()` (and so to `Srcset`) without touching the shared facade.
+     */
+    public function withProxyUrlsMintsThroughTheGivenGenerator(): void
+    {
+        $shared = new SignedProxyUrlGenerator();
+        $pinned = new SignedProxyUrlGenerator();
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $derivatives = $this->derivatives(proxyUrls: $shared);
+
+        $url = $derivatives->withProxyUrls($pinned)->urlFor($file, 'thumb');
+
+        Assert::notNull($url);
+        Assert::same($pinned->lastVariant, 'thumb');
+        Assert::null($shared->lastVariant);
+
+        $derivatives->urlFor($file, 'thumb');
+        Assert::same($shared->lastVariant, 'thumb');
+    }
+
+    /**
+     * What can never be generated still throws instead of minting a URL
+     * that 404s: the cheap refusals run on the proxy path too.
+     */
+    public function theProxyPathStillRefusesWhatCanNeverBeGenerated(): void
+    {
+        $this->processor = Doubles::processor(supports: false);
+
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('No available processor');
+
+        $this->derivatives(proxyUrls: new SignedProxyUrlGenerator())->urlFor(Fixtures::file(), 'thumb');
+    }
+
+    /**
+     * A remembered failure is a refusal too.
+     */
+    public function theProxyPathReportsARememberedFailure(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $cache = new MemorySimpleCache();
+
+        try {
+            $this->derivatives(
+                processor: Doubles::failingProcessor(new ProcessingFailedException('broken')),
+                failures: $cache,
+            )->ensure($file, 'thumb');
+        } catch (ProcessingFailedException) {
+        }
+
+        Expect::exception(ProcessingFailedException::class);
+
+        $this->derivatives(proxyUrls: new SignedProxyUrlGenerator(), failures: $cache)->urlFor($file, 'thumb');
+    }
+
+    /**
+     * @return iterable<string, array{mixed}>
+     */
+    public static function malformedEntryProvider(): iterable
+    {
+        yield 'not an array' => ['unsupported'];
+        yield 'kind is not a string' => [['kind' => 1, 'message' => 'broken']];
+        yield 'message is not a string' => [['kind' => 'failed', 'message' => 1]];
+    }
+
+    /**
+     * Whatever else shares the cache, an entry that is not one this facade
+     * wrote is a miss: the rendition is generated, not refused.
+     */
+    #[DataProvider('malformedEntryProvider')]
+    public function aMalformedCacheEntryIsAMiss(mixed $entry): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $cache = Understudy::for(CacheInterface::class);
+        when(fn() => $cache->get(Arg::any(), Arg::any()))->returns($entry);
+
+        Assert::true($this->derivatives(failures: $cache)->ensure($file, 'thumb'));
+    }
+
+    private function brokenCache(): CacheInterface
+    {
+        $cache = Understudy::for(CacheInterface::class);
+        when(fn() => $cache->get(Arg::any(), Arg::any()))->throws(new \RuntimeException('cache is down'));
+        when(fn() => $cache->set(Arg::any(), Arg::any(), Arg::any()))->throws(new \RuntimeException('cache is down'));
+
+        return $cache;
+    }
+
+    /**
+     * An existing rendition is served whatever this installation could
+     * generate today: no processor is consulted, no lock taken.
+     */
+    public function anExistingRenditionIsServedWithoutAProcessorForIt(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $this->processor = Doubles::processor(supports: false);
+        $derivatives = $this->derivatives();
+        $this->store->putDerivative($file, $derivatives->descriptor('thumb'), 'generated earlier');
+
+        Assert::false($derivatives->ensure($file, 'thumb'));
+        verify(fn() => $this->mutexes->create(Arg::any()), never: true);
+    }
+
+    /**
+     * A store-native URL points at an object, it does not generate one: the
+     * rendition exists before the URL is handed out.
+     */
+    public function aStoreUrlIsMintedForAGeneratedRendition(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $derivatives = $this->derivatives(stores: new StoreRegistry([new DerivativeUrlMemoryStore($this->store)]));
+
+        Assert::string((string) $derivatives->urlFor($file, 'thumb'))->contains('signed.example.test');
+        Assert::true($derivatives->exists($file, 'thumb'));
+    }
+
+    /**
+     * The documented key: `fsimg.failed.` and 48 hex of the sha256 over the
+     * store, the rendition path, the original's `updatedAt` and its content
+     * hash — an operator can compute it to clear one entry.
+     */
+    public function theFailureKeyNamesTheRenditionAndTheOriginalsVersion(): void
+    {
+        $file = File::create(
+            id: 'file-1',
+            storeName: 'memory',
+            groupName: 'common',
+            relativePath: 'common/ab/cd/file-1/original.png',
+            originalName: 'photo.png',
+            size: 1024,
+            createdAt: Fixtures::now(),
+            mimeType: 'image/png',
+            contentHash: self::SHA,
+        );
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $cache = new SimpleCacheActionLogger(new MemorySimpleCache());
+        $derivatives = $this->derivatives(
+            processor: Doubles::failingProcessor(new ProcessingFailedException('broken')),
+            failures: $cache,
+        );
+
+        try {
+            $derivatives->ensure($file, 'thumb');
+        } catch (ProcessingFailedException) {
+        }
+
+        $sets = array_values(array_filter(
+            $cache->getActions(),
+            static fn(Action $action): bool => $action->getAction() === Action::SET,
+        ));
+        $expected = 'fsimg.failed.' . substr(hash('sha256', implode("\0", [
+            'memory',
+            $this->store->layout()->derivativePath($file, $derivatives->descriptor('thumb')),
+            $file->updatedAt->format('U.u'),
+            self::SHA,
+        ])), 0, 48);
+        Assert::same(\count($sets), 1);
+        Assert::same($sets[0]->getKey(), $expected);
+    }
+
     private function derivatives(
         ?StoreRegistry $stores = null,
         ?DeliveryPolicyRegistry $deliveryPolicies = null,
         ?ImageProcessorInterface $processor = null,
         int $maxSourceBytes = 67_108_864,
         ?ProxyUrlGeneratorInterface $proxyUrls = null,
+        ?CacheInterface $failures = null,
+        DateInterval $failureTtl = new DateInterval('PT5M'),
     ): Derivatives {
         return new Derivatives(
             stores: $stores ?? new StoreRegistry([$this->store]),
@@ -426,6 +917,8 @@ final class DerivativesTest
             clock: new StaticClock(Fixtures::now()),
             maxSourceBytes: $maxSourceBytes,
             proxyUrls: $proxyUrls,
+            failures: $failures,
+            failureTtl: $failureTtl,
         );
     }
 }

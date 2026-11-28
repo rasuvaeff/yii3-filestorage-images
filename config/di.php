@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Psr\Clock\ClockInterface;
 use Psr\Http\Message\StreamFactoryInterface;
+use Psr\SimpleCache\CacheInterface;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
 use Rasuvaeff\Yii3Filestorage\Repository\MaintenanceRepositoryInterface;
 use Rasuvaeff\Yii3Filestorage\Store\DerivativeResolverInterface;
@@ -51,6 +52,9 @@ return [
         DeliveryPolicyRegistry $deliveryPolicies,
         ClockInterface $clock,
         ?ProxyUrlGeneratorInterface $proxyUrls = null,
+        // Optional like the proxy: the application's PSR-16 cache, if it
+        // binds one, remembers failed generations. Never bound here.
+        ?CacheInterface $failures = null,
     ): Derivatives => new Derivatives(
         stores: $stores,
         presets: $presets,
@@ -65,6 +69,8 @@ return [
         // is installed and binds the generator — the container resolves the
         // nullable either way.
         proxyUrls: $proxyUrls,
+        failures: $failures,
+        failureTtl: new DateInterval($params['rasuvaeff/yii3-filestorage-images']['failureTtl']),
     ),
 
     // The reference implementation of the core contract. `-web`'s download
@@ -80,5 +86,6 @@ return [
         derivatives: $derivatives,
         presets: $presets,
         repository: $repository,
+        lockTimeoutSeconds: $params['rasuvaeff/yii3-filestorage-images']['warmLockTimeout'],
     ),
 ];

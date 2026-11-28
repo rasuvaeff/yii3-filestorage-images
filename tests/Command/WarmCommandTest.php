@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3FilestorageImages\Tests\Command;
 
+use Nyholm\Psr7\Factory\Psr17Factory;
+use Rasuvaeff\Understudy\Arg;
+use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
 use Rasuvaeff\Yii3Filestorage\Store\StoreRegistry;
@@ -13,6 +16,7 @@ use Rasuvaeff\Yii3FilestorageImages\Format;
 use Rasuvaeff\Yii3FilestorageImages\Preset;
 use Rasuvaeff\Yii3FilestorageImages\PresetRegistry;
 use Rasuvaeff\Yii3FilestorageImages\Processing\ImageProcessorInterface;
+use Rasuvaeff\Yii3FilestorageImages\Processing\ProcessedImage;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\DerivativeAwareMemoryStore;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Doubles;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Fixtures;
@@ -22,6 +26,9 @@ use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Test;
 use Yiisoft\Test\Support\Clock\StaticClock;
+
+use function Rasuvaeff\Understudy\verify;
+use function Rasuvaeff\Understudy\when;
 
 #[Test]
 #[Covers(WarmCommand::class)]
@@ -206,6 +213,117 @@ final class WarmCommandTest
      * SymfonyStyle wraps its success/warning blocks at the terminal width, so
      * the summary sentence may arrive with line breaks inside it.
      */
+    /**
+     * Review 1.0 #17. Only `FilestorageException` was caught: a layout's
+     * `InvalidArgumentException`, a mutex driver's `RuntimeException` or a
+     * stream error ended the whole run, without the "Last id" line `--after`
+     * resumes from. One rendition's failure is now one failure.
+     */
+    public function aForeignExceptionIsOneFailureNotTheEndOfTheRun(): void
+    {
+        $store = $this->storeWith('file-1', 'file-2');
+        $tester = $this->tester(
+            $store,
+            files: [Fixtures::file(id: 'file-1'), Fixtures::file(id: 'file-2')],
+            processor: Doubles::failingProcessor(new \RuntimeException('mutex backend went away')),
+            presets: new PresetRegistry([new Preset(name: 'thumb', format: Format::Webp, width: 100)]),
+        );
+
+        Assert::same($tester->execute([]), 1);
+        $display = $this->display($tester);
+        Assert::string($display)->contains('failed: file-1 thumb: mutex backend went away');
+        Assert::string($display)->contains('failed: file-2 thumb');
+        Assert::string($display)->contains('Last id: file-2');
+        Assert::string($display)->contains('2 failed');
+    }
+
+    /**
+     * An error nothing should catch still ends the run; with no file
+     * finished there is no id to resume after.
+     */
+    public function aFatalErrorOnTheFirstFileLeavesNoLastId(): void
+    {
+        $tester = $this->tester(
+            $this->storeWith('file-1'),
+            files: [Fixtures::file(id: 'file-1')],
+            processor: Doubles::failingProcessor(new \Error('engine bug')),
+            presets: new PresetRegistry([new Preset(name: 'thumb', format: Format::Webp, width: 100)]),
+        );
+
+        try {
+            $tester->execute([]);
+            Assert::fail('the error must propagate');
+        } catch (\Error $e) {
+            Assert::same($e->getMessage(), 'engine bug');
+        }
+
+        // Nothing finished: a resume starts from the beginning, file-1 included.
+        Assert::string($this->display($tester))->notContains('Last id');
+    }
+
+    /**
+     * Review 1.0 pass 2, N16: `Last id` is the last file whose presets were
+     * all attempted. A run that dies on file-2's second preset must not name
+     * file-2 — `--after file-2` would skip that preset for good.
+     */
+    public function aFatalErrorMidFileLeavesThePreviousFilesId(): void
+    {
+        $calls = 0;
+        $processor = Understudy::for(ImageProcessorInterface::class);
+        when(fn() => $processor->supports(Arg::any(), Arg::any()))->returns(true);
+        when(fn() => $processor->process(Arg::any(), Arg::any(), Arg::any()))
+            ->answers(static function () use (&$calls): ProcessedImage {
+                if (++$calls === 4) {
+                    throw new \Error('engine bug');
+                }
+
+                return new ProcessedImage(stream: (new Psr17Factory())->createStream('x'), width: 1, height: 1);
+            });
+        $tester = $this->tester(
+            $this->storeWith('file-1', 'file-2'),
+            files: [Fixtures::file(id: 'file-1'), Fixtures::file(id: 'file-2')],
+            processor: $processor,
+        );
+
+        try {
+            $tester->execute([]);
+            Assert::fail('the error must propagate');
+        } catch (\Error $e) {
+            Assert::same($e->getMessage(), 'engine bug');
+        }
+
+        Assert::string($this->display($tester))->contains('Last id: file-1');
+        Assert::string($this->display($tester))->notContains('Last id: file-2');
+    }
+
+    /**
+     * Batch work waits for another generator longer than a request does.
+     */
+    public function warmWaitsForTheLockWithItsOwnPatience(): void
+    {
+        [$mutexes, $mutex] = Doubles::mutexes();
+        $presets = new PresetRegistry([new Preset(name: 'thumb', format: Format::Webp, width: 100)]);
+        $tester = new CommandTester(new WarmCommand(
+            derivatives: new Derivatives(
+                stores: new StoreRegistry([$this->storeWith('file-1')]),
+                presets: $presets,
+                processor: Doubles::processor(),
+                mutexes: $mutexes,
+                deliveryPolicies: new DeliveryPolicyRegistry(),
+                clock: new StaticClock(Fixtures::now()),
+            ),
+            presets: $presets,
+            repository: new MemoryMaintenanceRepository([Fixtures::file(id: 'file-1')]),
+            lockTimeoutSeconds: 90,
+        ));
+
+        $tester->execute([]);
+
+        $waits = Arg::captor();
+        verify(fn() => $mutex->acquire($waits->capture()), times: 1);
+        Assert::same($waits->last(), 90);
+    }
+
     private function display(CommandTester $tester): string
     {
         return (string) preg_replace(pattern: '/\\s+/', replacement: ' ', subject: $tester->getDisplay());

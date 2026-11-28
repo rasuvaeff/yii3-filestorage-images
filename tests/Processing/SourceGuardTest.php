@@ -8,10 +8,12 @@ use Nyholm\Psr7\Factory\Psr17Factory;
 use Rasuvaeff\Yii3FilestorageImages\Exception\ProcessingFailedException;
 use Rasuvaeff\Yii3FilestorageImages\Exception\UnsupportedSourceException;
 use Rasuvaeff\Yii3FilestorageImages\Processing\SourceGuard;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Gif;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Png;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\StallingStream;
 use Testo\Assert;
 use Testo\Codecov\Covers;
+use Testo\Data\DataProvider;
 use Testo\Expect;
 use Testo\Lifecycle\BeforeTest;
 use Testo\Test;
@@ -86,6 +88,28 @@ final class SourceGuardTest
         SourceGuard::readBounded(new StallingStream(), maxBytes: 0);
     }
 
+    /** A stalled stream says nothing about the file: transient, never remembered (review 1.0 pass 2, N8). */
+    public function aStalledStreamIsTransient(): void
+    {
+        try {
+            SourceGuard::readBounded(new StallingStream(), maxBytes: 0);
+            Assert::fail('a stalled stream must fail');
+        } catch (ProcessingFailedException $e) {
+            Assert::true($e->isTransient());
+        }
+    }
+
+    /** An empty source is a property of the file. */
+    public function anEmptySourceIsNotTransient(): void
+    {
+        try {
+            SourceGuard::readBounded((new Psr17Factory())->createStream(''), maxBytes: 0);
+            Assert::fail('an empty source must fail');
+        } catch (ProcessingFailedException $e) {
+            Assert::false($e->isTransient());
+        }
+    }
+
     public function readsDimensionsFromTheHeaderAlone(): void
     {
         // The bytes carry no pixel data at all — dimensions still resolve,
@@ -121,5 +145,224 @@ final class SourceGuardTest
         Expect::exception(ProcessingFailedException::class)->withMessageContaining('could not be established');
 
         SourceGuard::dimensions('this is not an image', maxPixels: 0);
+    }
+
+    /**
+     * Core review pass 2, N1, in this package: `getimagesizefromstring()`
+     * reports a GIF's logical screen, and every frame carries its own size —
+     * the one a decoder allocates. A 1x1 screen passed a 1 MP cap with an
+     * 8000x8000 frame behind it. A frame that does not fit inside its screen
+     * is refused, so the screen bounds every frame and the cap holds.
+     */
+    public function aGifFrameLargerThanItsScreenIsRefused(): void
+    {
+        Expect::exception(UnsupportedSourceException::class)
+            ->withMessageContaining('GIF frame 8000x8000 at (0,0) does not fit its 1x1 logical screen');
+
+        SourceGuard::dimensions(Gif::screen1x1Frame64mp(), maxPixels: 1_000_000);
+    }
+
+    /**
+     * @return iterable<string, array{array{int, int, int, int}}>
+     */
+    public static function frameOutsideTheScreenProvider(): iterable
+    {
+        yield 'wider' => [[0, 0, 101, 10]];
+        yield 'taller' => [[0, 0, 10, 101]];
+        yield 'pushed right' => [[95, 0, 6, 10]];
+        yield 'pushed down' => [[0, 95, 10, 6]];
+    }
+
+    #[DataProvider('frameOutsideTheScreenProvider')]
+    public function aGifFrameOutsideItsScreenIsRefused(array $frame): void
+    {
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('100x100 logical screen');
+
+        SourceGuard::dimensions(Gif::of(100, 100, [[0, 0, 100, 100], $frame]), maxPixels: 0);
+    }
+
+    public function aGifWhoseFramesFitIsMeasuredByItsScreen(): void
+    {
+        $gif = Gif::of(100, 80, [
+            "!\xFF\x0BNETSCAPE2.0\x03\x01\x00\x00\x00",
+            [0, 0, 100, 80],
+            [10, 10, 90, 70],
+            "!\xFE\x05hello\x00",
+            [99, 79, 1, 1],
+        ]);
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 8000), [100, 80]);
+    }
+
+    /**
+     * ImageMagick and libgd read a byte that starts no block, skip it and
+     * read the next: a frame hidden behind such a byte is still decoded, so
+     * the walk goes on to it the same way.
+     */
+    public function aFrameBehindAStrayByteIsStillChecked(): void
+    {
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('4000x4000');
+
+        SourceGuard::dimensions(Gif::of(10, 10, [[0, 0, 10, 10], "\x00\x07", [0, 0, 4000, 4000]]), maxPixels: 0);
+    }
+
+    /**
+     * A file cut short after a frame that fits decodes as far as it goes;
+     * so does the walk.
+     */
+    public function aGifCutShortAfterAFrameIsMeasured(): void
+    {
+        $gif = substr(Gif::of(20, 20, [[0, 0, 20, 20], [0, 0, 20, 20]], trailer: ''), 0, -3);
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [20, 20]);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function unmeasurableGifProvider(): iterable
+    {
+        yield 'no frame' => [Gif::of(20, 20, [])];
+        yield 'a zero-width frame' => [Gif::of(20, 20, [[0, 0, 0, 20]])];
+        yield 'a zero-height frame' => [Gif::of(20, 20, [[0, 0, 20, 0]])];
+        yield 'a frame descriptor cut short' => [Gif::of(20, 20, [",\x00\x00\x00"], trailer: '')];
+        yield 'a frame descriptor one byte short' => [Gif::of(20, 20, [',' . str_repeat("\x00", 8)], trailer: '')];
+    }
+
+    #[DataProvider('unmeasurableGifProvider')]
+    public function aGifWithoutAMeasurableFrameIsRefused(string $gif): void
+    {
+        Expect::exception(ProcessingFailedException::class)->withMessageContaining('could not be established');
+
+        SourceGuard::dimensions($gif, maxPixels: 0);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function zeroSidedHeaderProvider(): iterable
+    {
+        yield 'zero width' => [Png::header(width: 0, height: 5)];
+        yield 'zero height' => [Png::header(width: 5, height: 0)];
+    }
+
+    /**
+     * `getimagesizefromstring()` reports a header's zero side as it is; a
+     * side of nothing is no dimension to size a rendition from.
+     */
+    #[DataProvider('zeroSidedHeaderProvider')]
+    public function aHeaderWithAZeroSideIsRefused(string $header): void
+    {
+        Expect::exception(ProcessingFailedException::class)->withMessageContaining('could not be established');
+
+        SourceGuard::dimensions($header, maxPixels: 0);
+    }
+
+    /**
+     * @return iterable<string, array{int, int}>
+     */
+    public static function globalTableProvider(): iterable
+    {
+        yield 'two colours' => [0x80, 6];
+        yield 'four colours' => [0x81, 12];
+    }
+
+    /**
+     * The global colour table is data, not blocks: its size comes from the
+     * screen descriptor's packed byte, and the walk starts after it. A table
+     * whose bytes all read as the trailer stops any walk that starts inside
+     * it short of the frame.
+     */
+    #[DataProvider('globalTableProvider')]
+    public function theGlobalColourTableIsSkippedWhateverItsBytesSay(int $flags, int $tableBytes): void
+    {
+        $gif = Gif::raw(100, 100, $flags, str_repeat(';', $tableBytes), Gif::frame(0, 0, 100, 100) . ';');
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [100, 100]);
+    }
+
+    /**
+     * Only the table flag (bit 7) says a global table follows; the size bits
+     * alone do not, and the aspect byte before the blocks is not a block.
+     */
+    public function withoutTheTableFlagTheBlocksFollowTheScreenDescriptor(): void
+    {
+        $gif = Gif::raw(100, 100, 0x01, '', Gif::frame(0, 0, 100, 100) . ';', aspect: 0x3B);
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [100, 100]);
+    }
+
+    /**
+     * What follows the trailer is not part of the image: the decoders stop
+     * there, and so does the walk.
+     */
+    public function nothingAfterTheTrailerIsMeasured(): void
+    {
+        $gif = Gif::of(10, 10, [[0, 0, 10, 10], ';', [0, 0, 4000, 4000]], trailer: '');
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [10, 10]);
+    }
+
+    /**
+     * An extension's sub-blocks are skipped by their sizes, every one of them
+     * up to the terminator: bytes that would read as a frame inside the
+     * second sub-block are data.
+     */
+    public function aFrameShapedExtensionPayloadIsSkipped(): void
+    {
+        $hidden = Gif::frame(0, 0, 4000, 4000);
+        $gif = Gif::raw(
+            10,
+            10,
+            0x80,
+            "\x00\x00\x00\xFF\xFF\xFF",
+            "!\xFE\x03abc" . \chr(\strlen($hidden)) . $hidden . "\x00" . Gif::frame(0, 0, 10, 10) . ';',
+        );
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [10, 10]);
+    }
+
+    /**
+     * @return iterable<string, array{int, string}>
+     */
+    public static function localTableProvider(): iterable
+    {
+        yield 'two colours' => [0x80, str_repeat(';', 6)];
+        yield 'four colours' => [0x81, str_repeat(';', 12)];
+        yield 'size bits without the table flag' => [0x01, ''];
+    }
+
+    /**
+     * A frame's local colour table is skipped by the size its own packed
+     * byte declares, so the walk reaches the next frame — here the one that
+     * does not fit.
+     */
+    #[DataProvider('localTableProvider')]
+    public function aLocalColourTableIsSkippedToTheNextFrame(int $flags, string $table): void
+    {
+        $gif = Gif::raw(
+            100,
+            100,
+            0x80,
+            "\x00\x00\x00\xFF\xFF\xFF",
+            Gif::frame(0, 0, 100, 100, $flags, $table) . Gif::frame(0, 0, 4000, 4000) . ';',
+        );
+
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('4000x4000');
+
+        SourceGuard::dimensions($gif, maxPixels: 0);
+    }
+
+    /**
+     * A descriptor that ends exactly at the end of the file is whole: it is
+     * read and checked.
+     */
+    public function aDescriptorEndingTheFileIsStillChecked(): void
+    {
+        $gif = Gif::raw(10, 10, 0x80, "\x00\x00\x00\xFF\xFF\xFF", ',' . pack('vvvvC', 0, 0, 4000, 4000, 0));
+
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('4000x4000');
+
+        SourceGuard::dimensions($gif, maxPixels: 0);
     }
 }

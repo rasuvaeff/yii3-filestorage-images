@@ -28,14 +28,25 @@ use Rasuvaeff\Yii3FilestorageImages\Preset;
  * ghostscript binary is possible (a stripped distro), and such a runtime
  * learns it at generation time: `process()` fails with
  * `ProcessingFailedException` naming the delegate, the same loud failure a
- * broken AVIF encoder produces.
+ * broken AVIF encoder produces. The registry cannot see a `policy.xml` that
+ * forbids the PDF coder either (Debian's default); that refusal surfaces from
+ * `process()` as `UnsupportedSourceException` — a verdict about the
+ * installation, not the file.
+ *
+ * Ghostscript parses untrusted PostScript. Keep it current, keep ImageMagick's
+ * default `-dSAFER` delegate, and prefer forbidding the PDF coder in
+ * `policy.xml` over this processor if PDFs are not needed.
  *
  * Resolution is chosen, not guessed: the page geometry is *pinged* and the
  * render DPI is the largest (≤ 150) that keeps the raster under the pixel
  * cap. Ordering, honestly: the byte cap is the only guard that runs before
  * ImageMagick parses the document — the ping itself is an ImageMagick parse
  * (metadata-only, no rasterisation), and a page whose 72-DPI geometry is
- * already over the cap is refused before a single pixel is allocated.
+ * already over the cap is refused before a single pixel is allocated. The
+ * ping is ImageMagick's reading of the file's text, not the page ghostscript
+ * renders, so the render is bounded on its own: ghostscript draws onto a
+ * fixed media of the pinged size (`pdf:fit-page`), and a raster that still
+ * comes out larger is refused.
  *
  * @api
  */
@@ -89,24 +100,38 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
 
         $bytes = SourceGuard::readBounded($source, $this->maxSourceBytes);
 
-        $dpi = $this->renderDpi($bytes);
-
         // Page zero, selected at READ time: the blob API takes no page
         // selector, and reading the whole document first ("then keep frame
         // 0") makes a hundred-page PDF cost a hundred renders before one is
         // kept. The spooled file with the `[0]` selector limits the
-        // ghostscript invocation to the first page.
+        // ghostscript invocation — and the geometry ping — to the first page.
         $spool = tempnam(sys_get_temp_dir(), 'filestorage-pdf');
-        \assert($spool !== false);
-        file_put_contents($spool, $bytes);
+        if ($spool === false || file_put_contents($spool, $bytes) !== \strlen($bytes)) {
+            if ($spool !== false) {
+                @unlink($spool);
+            }
+
+            throw ProcessingFailedException::transient('Could not spool the PDF to a temporary file');
+        }
 
         $image = new \Imagick();
 
         try {
+            [$dpi, $pageWidth, $pageHeight] = $this->renderGeometry($spool);
+
             try {
                 // Density before the read: ImageMagick rasterises PDFs at the
                 // resolution in effect when the document is opened.
                 $image->setResolution($dpi, $dpi);
+                // The ping is ImageMagick's own scan of the file, not the page
+                // ghostscript renders: an indirect `/MediaBox`, a box inside a
+                // compressed object stream or a `/UserUnit` ping as something
+                // small while the page is enormous (review 1.0 pass 2, N1).
+                // `pdf:fit-page` makes ghostscript render onto a fixed media
+                // of the pinged size (`-dFIXEDMEDIA -dPDFFitPage`), scaling
+                // whatever the page really is into it — the raster is bounded
+                // by the geometry the DPI was chosen for, not by the document.
+                $image->setOption('pdf:fit-page', "{$pageWidth}x{$pageHeight}");
                 $image->readImage($spool . '[0]');
 
                 $sourceWidth = $image->getImageWidth();
@@ -114,6 +139,8 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
                 if ($sourceWidth < 1 || $sourceHeight < 1) {
                     throw new ProcessingFailedException('Imagick rendered an empty PDF page');
                 }
+
+                $this->assertWithin($sourceWidth, $sourceHeight, $pageWidth, $pageHeight, $dpi);
 
                 $target = TargetSize::calculate($sourceWidth, $sourceHeight, $preset);
 
@@ -132,14 +159,11 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
 
                 $blob = $image->getImageBlob();
             } catch (\ImagickException $exception) {
-                throw new ProcessingFailedException(
-                    "Imagick could not render the PDF: {$exception->getMessage()}",
-                    previous: $exception,
-                );
+                throw ImagickFailure::from($exception, 'Imagick could not render the PDF');
             }
 
             if ($blob === '') {
-                throw new ProcessingFailedException('Imagick produced an empty PDF preview');
+                throw ProcessingFailedException::transient('Imagick produced an empty PDF preview');
             }
 
             return new ProcessedImage(
@@ -154,25 +178,28 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
     }
 
     /**
-     * The render DPI: page geometry comes from `pingImageBlob()` — a metadata
-     * read at the 72-DPI baseline, nothing rasterised — and the DPI is the
-     * largest (up to 150) whose raster stays under the pixel cap.
+     * The render DPI and the page geometry it was chosen for: the geometry
+     * comes from a ping of page `[0]` — a metadata read at the 72-DPI
+     * baseline, nothing rasterised — and the DPI is the largest (up to 150)
+     * whose raster stays under the pixel cap. ImageMagick's PDF coder takes
+     * the page box from a scan of the file's raw text, so the ping reports
+     * the *largest* direct box in the document (measured, review 1.0 #13) and
+     * misses boxes it cannot read at all (pass 2, N1). It is not an upper
+     * bound on its own: `process()` makes it one with `pdf:fit-page` and
+     * checks the raster afterwards.
      *
-     * @param non-empty-string $bytes
+     * @return array{float, positive-int, positive-int}
      */
-    private function renderDpi(string $bytes): float
+    private function renderGeometry(string $spool): array
     {
         $ping = new \Imagick();
 
         try {
-            $ping->pingImageBlob($bytes);
+            $ping->pingImage($spool . '[0]');
             $pageWidth = $ping->getImageWidth();
             $pageHeight = $ping->getImageHeight();
         } catch (\ImagickException $exception) {
-            throw new ProcessingFailedException(
-                "Imagick could not read the PDF page geometry: {$exception->getMessage()}",
-                previous: $exception,
-            );
+            throw ImagickFailure::from($exception, 'Imagick could not read the PDF page geometry');
         } finally {
             $ping->clear();
         }
@@ -195,7 +222,7 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
         }
 
         if ($this->maxSourcePixels === 0) {
-            return (float) self::MAX_RENDER_DPI;
+            return [(float) self::MAX_RENDER_DPI, $pageWidth, $pageHeight];
         }
 
         // DPI scales both axes linearly, so rendered pixels scale with its
@@ -204,6 +231,29 @@ final readonly class PdfPreviewProcessor implements ImageProcessorInterface
         // at least 72.
         $affordable = (float) self::BASE_DPI * sqrt($this->maxSourcePixels / $baselinePixels);
 
-        return (float) min(self::MAX_RENDER_DPI, (int) $affordable);
+        return [(float) min(self::MAX_RENDER_DPI, (int) $affordable), $pageWidth, $pageHeight];
+    }
+
+    /**
+     * The hard check after the render: the raster is no larger than the
+     * pinged page at the chosen DPI (one pixel of rounding per side). A
+     * ghostscript that ignored the fixed media — an ImageMagick without
+     * `pdf:fit-page` support — is caught here, after the allocation but
+     * before anything is resized, encoded or cached as a rendition.
+     */
+    private function assertWithin(int $width, int $height, int $pageWidth, int $pageHeight, float $dpi): void
+    {
+        $maxWidth = (int) ceil((float) $pageWidth * $dpi / (float) self::BASE_DPI) + 1;
+        $maxHeight = (int) ceil((float) $pageHeight * $dpi / (float) self::BASE_DPI) + 1;
+
+        if ($width > $maxWidth || $height > $maxHeight) {
+            throw new UnsupportedSourceException(sprintf(
+                'PDF page rendered at %dx%d pixels, larger than the %dx%d its pinged geometry allows',
+                $width,
+                $height,
+                $maxWidth,
+                $maxHeight,
+            ));
+        }
     }
 }

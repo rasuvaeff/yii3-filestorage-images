@@ -82,12 +82,19 @@ final readonly class GdImageProcessor implements ImageProcessorInterface
         }
 
         $bytes = SourceGuard::readBounded($source, $this->maxSourceBytes);
-        [$sourceWidth, $sourceHeight] = SourceGuard::dimensions($bytes, $this->maxSourcePixels);
+        SourceGuard::dimensions($bytes, $this->maxSourcePixels);
 
         $image = @imagecreatefromstring($bytes);
         if (!$image instanceof GdImage) {
             throw new ProcessingFailedException('GD could not decode the source image');
         }
+
+        // The decoded image, not the header: libgd decodes a GIF's first frame
+        // at the frame's size, which may be smaller than the logical screen
+        // the header guard reports — sizing from the screen cropped a region
+        // the image does not have.
+        $sourceWidth = max(1, imagesx($image));
+        $sourceHeight = max(1, imagesy($image));
 
         $target = TargetSize::calculate($sourceWidth, $sourceHeight, $preset);
         $canvas = $this->canvas($target, $preset->format);
@@ -104,7 +111,7 @@ final readonly class GdImageProcessor implements ImageProcessorInterface
             $target->sourceWidth,
             $target->sourceHeight,
         )) {
-            throw new ProcessingFailedException('GD could not resample the source image');
+            throw ProcessingFailedException::transient('GD could not resample the source image');
         }
 
         return new ProcessedImage(
@@ -121,12 +128,12 @@ final readonly class GdImageProcessor implements ImageProcessorInterface
     {
         $canvas = imagecreatetruecolor($target->width, $target->height);
         if (!$canvas instanceof GdImage) {
-            throw new ProcessingFailedException('GD could not allocate the output canvas');
+            throw ProcessingFailedException::transient('GD could not allocate the output canvas');
         }
 
         if ($format->supportsAlpha()) {
-            imagealphablending($canvas, false);
-            imagesavealpha($canvas, true);
+            imagealphablending($canvas, enable: false);
+            imagesavealpha($canvas, enable: true);
             $background = imagecolorallocatealpha($canvas, 0, 0, 0, 127);
         } else {
             // JPEG has no alpha channel; a transparent source composites onto
@@ -134,7 +141,7 @@ final readonly class GdImageProcessor implements ImageProcessorInterface
             $background = imagecolorallocate($canvas, 255, 255, 255);
         }
         if ($background === false || !imagefill($canvas, 0, 0, $background)) {
-            throw new ProcessingFailedException('GD could not prepare the output canvas');
+            throw ProcessingFailedException::transient('GD could not prepare the output canvas');
         }
 
         return $canvas;
@@ -147,7 +154,7 @@ final readonly class GdImageProcessor implements ImageProcessorInterface
     {
         $resource = fopen('php://temp', 'w+b');
         if ($resource === false) {
-            throw new ProcessingFailedException('Could not open a temporary stream for the encoded image');
+            throw ProcessingFailedException::transient('Could not open a temporary stream for the encoded image');
         }
 
         $written = match ($preset->format) {
@@ -165,7 +172,7 @@ final readonly class GdImageProcessor implements ImageProcessorInterface
         if (!$written) {
             fclose($resource);
 
-            throw new ProcessingFailedException("GD could not encode the image as \"{$preset->format->value}\"");
+            throw ProcessingFailedException::transient("GD could not encode the image as \"{$preset->format->value}\"");
         }
 
         rewind($resource);

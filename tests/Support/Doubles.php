@@ -50,6 +50,36 @@ final class Doubles
     }
 
     /**
+     * A processor that supports everything and fails every process() with
+     * `$failure`.
+     */
+    public static function failingProcessor(\Throwable $failure): ImageProcessorInterface
+    {
+        $processor = Understudy::for(ImageProcessorInterface::class);
+        when(fn() => $processor->supports(Arg::any(), Arg::any()))->returns(true);
+        when(fn() => $processor->process(Arg::any(), Arg::any(), Arg::any()))->throws($failure);
+
+        return $processor;
+    }
+
+    /**
+     * Mutexes whose acquire() first runs `$meanwhile` — what another request
+     * did while this one waited — and answers with its result.
+     *
+     * @param \Closure(): bool $meanwhile
+     */
+    public static function mutexesThatRunFirst(\Closure $meanwhile): MutexFactoryInterface
+    {
+        $mutex = Understudy::for(MutexInterface::class);
+        when(fn() => $mutex->acquire(Arg::any()))->answers(static fn(): bool => $meanwhile());
+
+        $factory = Understudy::for(MutexFactoryInterface::class);
+        when(fn() => $factory->create(Arg::any()))->returns($mutex);
+
+        return $factory;
+    }
+
+    /**
      * @return array{MutexFactoryInterface, MutexInterface} The factory and the
      *         mutex every create() hands out, so a test can verify releases.
      */

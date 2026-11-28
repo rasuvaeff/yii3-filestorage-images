@@ -22,7 +22,14 @@ return [
         // ],
         'presets' => [],
         'defaultUrlTtl' => 'PT1H',
-        'lockTimeout' => 30,
+        // Seconds a request waits for another one's generation of the same
+        // rendition — it holds a worker meanwhile, so keep it short.
+        'lockTimeout' => 10,
+        // The same wait for filestorage:warm, which can afford it.
+        'warmLockTimeout' => 60,
+        // How long a failed generation is remembered (needs a bound
+        // Psr\SimpleCache\CacheInterface; without one nothing is remembered).
+        'failureTtl' => 'PT5M',
         'maxSourceBytes' => 67_108_864,
         'maxSourcePixels' => 40_000_000,
         'svg' => [

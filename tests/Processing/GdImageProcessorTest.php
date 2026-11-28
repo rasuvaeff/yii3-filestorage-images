@@ -296,6 +296,102 @@ final class GdImageProcessorTest
         Assert::true(\strlen((string) $thorough->stream) < \strlen((string) $sparse->stream));
     }
 
+    /**
+     * libgd decodes a GIF's first frame at the frame's own size, not the
+     * logical screen's. Sizing the output from the screen (what the header
+     * guard reports) cropped a 10x10 frame as if it were 100x100 and
+     * stretched it into a 50x50 thumbnail of mostly nothing; ImageMagick
+     * already measures the decoded frame.
+     */
+    public function aGifFrameSmallerThanItsScreenIsSizedByTheFrame(): void
+    {
+        $this->requireExtension();
+        $frame = imagecreatetruecolor(10, 10);
+        imagefill($frame, 0, 0, (int) imagecolorallocate($frame, 200, 100, 50));
+        ob_start();
+        imagegif($frame);
+        $gif = (string) ob_get_clean();
+        $gif = substr_replace($gif, pack('vv', 100, 100), 6, 4);
+        $descriptor = strpos($gif, ',', 13);
+        Assert::true($descriptor !== false);
+        $gif = substr_replace($gif, pack('vv', 5, 5), $descriptor + 1, 4);
+
+        $processed = (new GdImageProcessor(new Psr17Factory()))->process(
+            (new Psr17Factory())->createStream($gif),
+            'image/gif',
+            new Preset(name: 'out', format: Format::Png, width: 50, height: 50),
+        );
+
+        Assert::same([$processed->width, $processed->height], [10, 10]);
+    }
+
+    /**
+     * @return iterable<string, array{int, int}>
+     */
+    public static function singlePixelSideProvider(): iterable
+    {
+        yield 'one pixel wide' => [1, 5];
+        yield 'one pixel tall' => [5, 1];
+    }
+
+    /**
+     * A decoded side of one pixel is the source's size, not rounded up to
+     * anything: contain without upscale keeps it.
+     */
+    #[DataProvider('singlePixelSideProvider')]
+    public function aSinglePixelSideIsTheSourceSize(int $width, int $height): void
+    {
+        $this->requireExtension();
+
+        $processed = (new GdImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource($width, $height),
+            'image/png',
+            new Preset(name: 'thumb', format: Format::Png, width: 100, height: 100),
+        );
+
+        Assert::same([$processed->width, $processed->height], [$width, $height]);
+    }
+
+    /**
+     * @return iterable<string, array{int<0, 100>, int}>
+     */
+    public static function pngEffortProvider(): iterable
+    {
+        // quality * 9 / 100, rounded down, is the zlib level; the stream
+        // header's FLEVEL names its band: 2 for level 6, 3 for 7 and up,
+        // 1 for 2..5. The qualities sit at the band edges.
+        yield 'quality 66 is level 5' => [66, 1];
+        yield 'quality 67 is level 6' => [67, 2];
+        yield 'quality 70 is level 6' => [70, 2];
+        yield 'quality 77 is level 6' => [77, 2];
+        yield 'quality 78 is level 7' => [78, 3];
+    }
+
+    /**
+     * The quality-to-level mapping, read back from the zlib header of the
+     * first IDAT chunk — the encoder records the effort band it was asked
+     * for.
+     *
+     * @param int<0, 100> $quality
+     */
+    #[DataProvider('pngEffortProvider')]
+    public function pngQualityPicksTheZlibLevel(int $quality, int $band): void
+    {
+        $this->requireExtension();
+
+        $processed = (new GdImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource(16, 16),
+            'image/png',
+            new Preset(name: 'png', format: Format::Png, width: 16, quality: $quality),
+        );
+
+        $png = (string) $processed->stream;
+        $idat = strpos($png, 'IDAT');
+        Assert::true($idat !== false);
+
+        Assert::same(\ord($png[$idat + 5]) >> 6, $band);
+    }
+
     private function requireExtension(): void
     {
         if (!\extension_loaded('gd')) {
@@ -332,8 +428,8 @@ final class GdImageProcessorTest
     private function transparentPngSource(int $width, int $height): \Psr\Http\Message\StreamInterface
     {
         $image = imagecreatetruecolor($width, $height);
-        imagealphablending($image, false);
-        imagesavealpha($image, true);
+        imagealphablending($image, enable: false);
+        imagesavealpha($image, enable: true);
         imagefill($image, 0, 0, (int) imagecolorallocatealpha($image, 0, 0, 0, 127));
 
         ob_start();

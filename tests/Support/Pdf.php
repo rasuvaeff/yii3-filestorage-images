@@ -71,10 +71,10 @@ final class Pdf
 
     /**
      * @return non-empty-string A real two-page PDF: the first page of the
-     *         given size, the second one much smaller — the preview must come
-     *         from the first page alone.
+     *         given size, the second one (by default much smaller) — the
+     *         preview must come from the first page alone.
      */
-    public static function twoPages(int $width, int $height): string
+    public static function twoPages(int $width, int $height, int $secondWidth = 20, int $secondHeight = 10): string
     {
         return self::build([
             '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
@@ -82,9 +82,46 @@ final class Pdf
             "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {$width} {$height}]"
                 . ' /Resources << /ProcSet [/PDF] >> /Contents 4 0 R >> endobj',
             '4 0 obj ' . self::stream(' ') . ' endobj',
-            '5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 20 10]'
+            "5 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {$secondWidth} {$secondHeight}]"
                 . ' /Resources << /ProcSet [/PDF] >> /Contents 6 0 R >> endobj',
             '6 0 obj ' . self::stream(' ') . ' endobj',
+        ]);
+    }
+
+    /**
+     * A page whose real size ImageMagick's ping cannot see: the MediaBox is
+     * an indirect reference, which the PDF coder's scan of the raw text does
+     * not resolve (it reports its letter-size default), while ghostscript
+     * renders the referenced box (review 1.0 pass 2, N1).
+     *
+     * @return non-empty-string
+     */
+    public static function indirectMediaBox(int $width, int $height): string
+    {
+        return self::build([
+            '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+            '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+            '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox 5 0 R'
+                . ' /Resources << /ProcSet [/PDF] >> /Contents 4 0 R >> endobj',
+            '4 0 obj ' . self::stream(' ') . ' endobj',
+            "5 0 obj [0 0 {$width} {$height}] endobj",
+        ]);
+    }
+
+    /**
+     * A page whose `/UserUnit` multiplies its box: ImageMagick's ping ignores
+     * the unit, ghostscript honours it (review 1.0 pass 2, N1).
+     *
+     * @return non-empty-string
+     */
+    public static function userUnit(int $width, int $height, int $unit): string
+    {
+        return self::build([
+            '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+            '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+            "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {$width} {$height}] /UserUnit {$unit}"
+                . ' /Resources << /ProcSet [/PDF] >> /Contents 4 0 R >> endobj',
+            '4 0 obj ' . self::stream(' ') . ' endobj',
         ]);
     }
 }

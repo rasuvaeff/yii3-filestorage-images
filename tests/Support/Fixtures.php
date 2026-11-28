@@ -30,6 +30,9 @@ final class Fixtures
      * @param int<0, max> $size
      * @param non-empty-string $groupName
      */
+    /**
+     * @param array<array-key, mixed> $metadata
+     */
     public static function file(
         string $id = 'file-1',
         string $storeName = 'memory',
@@ -37,6 +40,7 @@ final class Fixtures
         int $size = 1024,
         string $groupName = 'common',
         ?string $relativePath = null,
+        array $metadata = [],
     ): File {
         return File::create(
             id: $id,
@@ -47,6 +51,7 @@ final class Fixtures
             size: $size,
             createdAt: self::now(),
             mimeType: $mimeType,
+            metadata: $metadata,
         );
     }
 }

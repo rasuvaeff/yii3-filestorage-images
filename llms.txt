@@ -12,11 +12,14 @@ composer require rasuvaeff/yii3-filestorage-images
 The application must bind `Yiisoft\Mutex\MutexFactoryInterface` (any
 yiisoft/mutex driver) — the package deliberately does not pick a lock driver.
 The file's store must implement the core
-`Rasuvaeff\Yii3Filestorage\Store\DerivativeAwareStoreInterface`
-(both core filesystem stores and `FlysystemStore` do).
+`Rasuvaeff\Yii3Filestorage\Store\DerivativeAwareStoreInterface`: core's
+`FileSystemStore`/`PublicFileSystemStore` do; `FlysystemStore` (`-flysystem`,
+S3) does NOT — every rendition there is `DerivativeGenerationException`
+(404 in `-web`). Requires `rasuvaeff/yii3-filestorage` ^0.10. Optional: bind a
+PSR-16 `Psr\SimpleCache\CacheInterface` to remember failed generations.
 A processor extension is needed at runtime: ext-gd and/or ext-imagick.
 
-`Srcset::for(Derivatives, PresetRegistry, File, ?array $presetNames = null, ?DateTimeImmutable $expiresAt = null): ?string` — 'url Ww, …' from preset widths; null when nothing yields a URL.
+`Srcset::for(Derivatives, PresetRegistry, File, ?array $presetNames = null, ?DateTimeImmutable $expiresAt = null): ?string` — 'url Ww, …'; W = the rendition's real width from `width`/`height` metadata (`TargetSize`), else the preset width; one candidate per width (first wins); a preset that cannot be produced is skipped; null when nothing yields a URL.
 `ImageMetadataStorage implements StorageInterface` — decorator over the
 facade: `add()` records `width`/`height` into `File::$metadata` from the
 bounded image header (policy's recipe; anything unparseable passes through
@@ -33,7 +36,7 @@ ImageMetadataStorage($s)`.
   served.
 - A derivative is a sibling object, not a metadata row, placed by the store's
   layout (`StoreInterface::layout()->derivativePath(File, DerivativeDescriptor)`,
-  core ^0.9): `DirectoryLayout` (default) → `<key>/original.jpg` +
+  core ^0.10): `DirectoryLayout` (default) → `<key>/original.jpg` +
   `<key>/thumb-v1.webp`; `FlatSiblingLayout` → `blobs/ab/cd/<sha>.jpg` +
   `blobs/ab/cd/<sha>-thumb-v1.webp`. Deleting a file deletes what the layout
   names, derivatives included. This package never builds a path itself.
@@ -44,6 +47,26 @@ ImageMetadataStorage($s)`.
   (blob-scoped sharing under dedup). No per-owner watermarks here.
 - Decode guards: `maxSourceBytes` (default 64 MiB) while reading,
   `maxSourcePixels` (default 40'000'000) from the image header before decode.
+  A GIF's blocks are walked: a frame not fitting its logical screen is
+  `UnsupportedSourceException` (getimagesize reports the screen only); GD sizes
+  the output from the decoded frame. Imagick also pings frame `[0]` with the coder of the detected media type
+  (never IM's sniffing) and checks the frame and its canvas (GIF logical
+  screen can be smaller than the frame), reads only `[0]`, and narrows IM's
+  WIDTH/HEIGHT/LISTLENGTH limits for the read (restored after; only lowered;
+  skipped under ZTS, where the limits are shared between threads). Animated
+  WebP: the first `ANMF` frame is cut out of the RIFF container as a still
+  before decoding (IM's WebP coder ignores `[0]`); a malformed container is a
+  `ProcessingFailedException`.
+- Failed generations (decode failure, guard refusal, output over `maxBytes`)
+  are remembered for `failureTtl` when a PSR-16 cache is bound; keyed by the
+  rendition path + original `updatedAt`/content hash (key ≤ 64 chars, PSR-16
+  portable). Missing originals, store errors and transient processing
+  failures (`ProcessingFailedException::isTransient()`: stalled stream, spool
+  failure, IM resource/cache/file-open errors — only CorruptImage/Coder/Delegate
+  errors are about the file) are never remembered. A cache that throws is a miss on
+  read and a no-op on write. A remembered failure is rethrown with its
+  kind (unsupported → `UnsupportedSourceException`, decode →
+  `ProcessingFailedException`, size → `DerivativeGenerationException`).
 - SVG is never processed into raster variants; use `SvgSanitizerInterface` at
   upload time and still serve SVG as attachment unless on a cookie-less origin.
 
@@ -64,7 +87,9 @@ ImageMetadataStorage($s)`.
         ],
     ],
     'defaultUrlTtl' => 'PT1H',     // DateInterval spec for urlFor()
-    'lockTimeout' => 30,           // seconds to wait for the generation lock
+    'lockTimeout' => 10,           // seconds a request waits for another's generation
+    'warmLockTimeout' => 60,       // the same wait for filestorage:warm
+    'failureTtl' => 'PT5M',        // how long a failed generation is remembered (needs PSR-16)
     'maxSourceBytes' => 67_108_864,
     'maxSourcePixels' => 40_000_000,
     'svg' => ['maxBytes' => 2_097_152, 'maxElements' => 10_000],
@@ -77,17 +102,24 @@ ImageMetadataStorage($s)`.
 ### `Derivatives` (facade; DI-provided)
 
 ```php
-public function ensure(File $file, string $presetName): bool;        // true = generated now
+public function ensure(File $file, string $presetName, ?int $lockTimeoutSeconds = null): bool; // true = generated now
 public function stream(File $file, string $presetName): ?StreamInterface; // lazy-generates
 public function urlFor(File $file, string $presetName, ?DateTimeImmutable $expiresAt = null): ?string;
 public function exists(File $file, string $presetName): bool;        // pure probe
 public function descriptor(string $presetName): DerivativeDescriptor; // e.g. thumb-v1.webp
+public function withProxyUrls(?ProxyUrlGeneratorInterface $proxyUrls): self; // same facade, another generator
 ```
 
 `urlFor()` order: direct public URL (only when the group's `DeliveryPolicy`
 has `allowDirectPublicUrl`) → store-native temporary URL → signed proxy URL
 (when yii3-filestorage-web is installed; the variant is inside the HMAC) →
-`null` (serve the stream yourself).
+`null` (serve the stream yourself). Generates only for the store-URL branches;
+the proxy URL is minted without generating, but unsupported sources, the byte
+cap and remembered failures still throw. Outside the tenant's request (job,
+mail) mint through a pinned generator:
+`$derivatives->withProxyUrls($hmac->forScope($tenantId))->urlFor(...)` (also
+for `Srcset::for()`); core 0.10's `Storage::withProxyUrls()` does the same for
+originals (concrete `Storage`, `-db`'s `DeduplicatingStorage` 0.4+).
 
 `Derivatives` implements core's `Store\DerivativeResolverInterface` —
 `stream()`/`descriptor()` are that contract; `-web`'s download action serves
@@ -97,9 +129,10 @@ variant tokens through it. `UnknownPresetException` extends core's
 Throws: `UnknownPresetException`, `UnsupportedSourceException` (skip-grade:
 unprocessable combination or over a guard), `ProcessingFailedException`
 (corrupt bytes), `DerivativeGenerationException` (no capability / missing
-original / lock timeout). All implement the core `FilestorageException`.
-A file path that does not fit the store's layout surfaces core's
-`InvalidArgumentException` (misconfigured store).
+original / lock timeout / remembered output over `maxBytes`). All implement
+the core `FilestorageException`. An ImageMagick `policy.xml` refusal is
+`UnsupportedSourceException`. A file path that does not fit the store's
+layout surfaces core's `InvalidArgumentException` (misconfigured store).
 
 ### `Preset` / `PresetRegistry`
 
@@ -136,7 +169,9 @@ interface ImageProcessorInterface {
 - `TargetSize::calculate(int $sourceWidth, int $sourceHeight, Preset $preset)` —
   the shared pure geometry (output canvas + centered crop window).
 - Imagick applies EXIF orientation and strips metadata; GD does neither
-  orientation nor keeps metadata. Animated GIFs become their first frame.
+  orientation nor keeps metadata. Animated GIFs become their first frame
+  (Imagick decodes only frame `[0]`); animated WebP too under Imagick (GD
+  cannot decode animated WebP).
 
 ### SVG (`…\Svg`)
 
@@ -158,10 +193,15 @@ parsing + post-pass removing `foreignObject`, `animate`, `animateMotion`,
 filestorage:warm [--preset=NAME]... [--after=FILE_ID] [--limit=N]
 ```
 
-Pre-generates through `Derivatives::ensure()` (the same locked path as lazy).
-Idempotent, resumable via `--after`, exit 1 only when a generation *failed*
-(unsupported sources are counted as skips). Needs
-`MaintenanceRepositoryInterface`.
+Pre-generates through `Derivatives::ensure()` (the same locked path as lazy,
+waiting `warmLockTimeout`). Idempotent, resumable via `--after`; `Last id:` is
+printed even when the run dies and names the last file whose presets were all
+attempted. Exit 1 only when a generation *failed*
+(unsupported sources are skips; any other `Exception` of one rendition is one
+failure, the run goes on). Needs
+`MaintenanceRepositoryInterface`; under tenancy that takes `-db`'s
+`globalMaintenanceAccess` param, and then the command walks every tenant's
+files (set it in the console config only).
 
 ## DI (config-plugin)
 
@@ -179,5 +219,11 @@ Source `application/pdf` -> first page as the preset image; joined into
 plumbing). Imagick + the ghostscript delegate only; without the delegate the
 combination is reported unsupported, like AVIF. Render DPI =
 72*sqrt(maxSourcePixels/baselinePoints2) (<=150); a page over the cap at the
-72-DPI baseline is refused before a pixel is allocated. `make test-images`
+72-DPI baseline is refused before a pixel is allocated. ImageMagick takes
+the page box from a scan of the file's raw text: the largest direct box in the
+document (one oversized page refuses the preview), blind to an indirect
+`/MediaBox`, a compressed object stream and `/UserUnit`. The render is bounded
+anyway: `pdf:fit-page` = pinged geometry (ghostscript `-dFIXEDMEDIA
+-dPDFFitPage`, page scaled to fit, letterboxed if its real box differs), and a
+raster larger than pinged geometry × DPI is an `UnsupportedSourceException`. A `policy.xml` forbidding PDF → `UnsupportedSourceException`. `make test-images`
 installs ghostscript, so CI runs the PDF suite.

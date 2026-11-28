@@ -30,7 +30,13 @@ capability. Namespace `Rasuvaeff\Yii3FilestorageImages\`. Full API reference:
 
 3. **Guards precede every decode.** `maxSourceBytes` bounds the read;
    `maxSourcePixels` is checked against the *header* before the decoder
-   allocates. A 200-byte PNG may claim 100000×100000 pixels.
+   allocates. A 200-byte PNG may claim 100000×100000 pixels. A GIF header
+   reports the logical screen, not the frames: `SourceGuard` walks the blocks
+   and refuses a frame outside the screen (both processors). Under Imagick also
+   ping frame `[0]`
+   (filename selector — `readImageBlob()`'s second argument ignores it), check
+   frame and canvas, force the coder from the detected media type, decode only
+   `[0]`, and narrow IM's resource limits only for the read.
 
 4. **Blob-scoped purity.** Under dedup, renditions live beside the shared
    stored object, where the store's layout puts them (`DirectoryLayout`:
@@ -48,16 +54,28 @@ capability. Namespace `Rasuvaeff\Yii3FilestorageImages\`. Full API reference:
 
 - `Yiisoft\Mutex\MutexFactoryInterface` — the generation-lock driver.
 - The store must implement `DerivativeAwareStoreInterface`
-  (core `FileSystemStore` qualifies; `FlysystemStore` does not implement it yet);
+  (core `FileSystemStore`/`PublicFileSystemStore` qualify; `FlysystemStore`
+  does not — every rendition on S3 fails, `-web` answers 404);
   URL results additionally need `DerivativeUrlProviderInterface`.
 - `filestorage:warm` needs `MaintenanceRepositoryInterface` (the `-db`
-  repository).
+  repository). Under tenancy `-db` grants it only with `globalMaintenanceAccess`,
+  and then warm walks every tenant — console config only.
+- Optional `Psr\SimpleCache\CacheInterface` — remembers failed generations
+  for `failureTtl`; without it a source that always fails is decoded again on
+  every request. Never remember a missing original, a store error or a
+  transient `ProcessingFailedException` (`isTransient()`: stalled stream,
+  spool, ImageMagick resource/cache errors). A cache that throws is no
+  cache — never a 500.
 
 ## Serving
 
 `urlFor()` = direct public URL (only under `allowDirectPublicUrl`) →
 store-native temporary URL → signed proxy URL carrying the variant (when
 `yii3-filestorage-web` binds `ProxyUrlGeneratorInterface`) → `null`, in which
-case the application serves `stream()` itself. The `-web` download action
+case the application serves `stream()` itself. Only the store-URL branches
+generate; the proxy URL is minted without generating (the proxy generates on
+its first request), but what can never be generated still throws. The `-web` download action
 serves variant tokens through `DerivativeResolverInterface`, which this package
-binds to `Derivatives`.
+binds to `Derivatives`. A URL minted outside the tenant's request (job, mail)
+goes through `$derivatives->withProxyUrls($hmacGenerator->forScope($tenantId))`
+— `Srcset::for()` over that facade too.

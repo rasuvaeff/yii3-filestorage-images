@@ -11,7 +11,9 @@ use Rasuvaeff\Yii3FilestorageImages\Fit;
 use Rasuvaeff\Yii3FilestorageImages\Format;
 use Rasuvaeff\Yii3FilestorageImages\Preset;
 use Rasuvaeff\Yii3FilestorageImages\Processing\ImagickImageProcessor;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\ImagickPolicy;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Png;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Webp;
 use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Core\Exception\SkipTest;
@@ -139,6 +141,41 @@ final class ImagickImageProcessorTest
     }
 
     /**
+     * The two orientations that mirror *and* turn the image: the top-left
+     * quadrant of the portrait output tells the transpose (red stays put)
+     * and the transverse (yellow comes up) from the plain rotations a
+     * dropped mirror would leave (blue, green).
+     */
+    #[DataProvider('transposingOrientationProvider')]
+    public function transposingOrientationsMirrorBeforeTheyTurn(int $orientation, string $topLeft): void
+    {
+        $this->requireExtension();
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->quadrantJpegSource(width: 40, height: 20, orientation: $orientation),
+            'image/jpeg',
+            new Preset(name: 'oriented', format: Format::Png, width: 20),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+        $pixel = $out->getImagePixelColor(5, 2)->getColor();
+
+        Assert::same([$processed->width, $processed->height], [20, 40]);
+        $actual = [$pixel['r'], $pixel['g'], $pixel['b']];
+        $expected = $this->rgb($topLeft);
+        foreach ($actual as $index => $channel) {
+            Assert::true(\abs($channel - $expected[$index]) <= 2);
+        }
+    }
+
+    public static function transposingOrientationProvider(): iterable
+    {
+        yield 'left-top transposes' => [5, 'red'];
+        yield 'right-bottom transverses' => [7, 'yellow'];
+    }
+
+    /**
      * JPEG has no alpha channel: a transparent source composites onto white,
      * not onto black and not onto whatever the encoder defaults to.
      */
@@ -248,6 +285,256 @@ final class ImagickImageProcessorTest
         );
     }
 
+    /**
+     * Review 1.0 A4, probe `gif.php` case 2. `getimagesize()` reads a GIF's
+     * logical screen; ImageMagick decodes each frame at its own descriptor
+     * size. Screen patched to 1x1, frame 1500x1500: the header guard saw one
+     * pixel, the decoder allocated 2.25 MP past a 1 MP cap. GD refuses such a
+     * file; Imagick decoded it. The shared header guard now walks the GIF
+     * blocks and refuses the frame first (core review pass 2, N1); the
+     * frame ping stays behind it.
+     */
+    public function aFrameLargerThanItsLogicalScreenIsRefusedBeforeDecoding(): void
+    {
+        $this->requireExtension();
+
+        $frame = new \Imagick();
+        $frame->newImage(1500, 1500, new \ImagickPixel('green'), 'GIF');
+        $bytes = $frame->getImageBlob();
+        // Logical screen width/height, little-endian, right after "GIF89a".
+        $bytes = substr_replace($bytes, "\x01\x00\x01\x00", 6, 4);
+        Assert::same(\array_slice((array) getimagesizefromstring($bytes), 0, 2), [1, 1]);
+
+        Expect::exception(UnsupportedSourceException::class)
+            ->withMessageContaining('GIF frame 1500x1500 at (0,0) does not fit its 1x1 logical screen');
+
+        (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: 1_000_000))->process(
+            (new Psr17Factory())->createStream($bytes),
+            'image/gif',
+            new Preset(name: 'thumb', format: Format::Png, width: 64),
+        );
+    }
+
+    /**
+     * Review 1.0 A4, probe `gif.php` case 1: every frame was decoded before
+     * the first was kept, so 30 frames of 1 MP cost 30 MP under a 2 MP cap.
+     * Only frame 0 is read now. Observable through ImageMagick's own
+     * list-length limit — the one a hardened `policy.xml` sets: a decoder
+     * allowed a single image still processes the animation, which a full
+     * decode cannot.
+     */
+    public function anAnimatedGifDecodesOnlyItsFirstFrame(): void
+    {
+        $this->requireExtension();
+
+        $animation = new \Imagick();
+        for ($i = 0; $i < 30; $i++) {
+            $animation->newImage(100, 100, new \ImagickPixel($i % 2 === 0 ? 'red' : 'blue'), 'GIF');
+        }
+        $bytes = $animation->getImagesBlob();
+
+        if (!\defined('Imagick::RESOURCETYPE_LISTLENGTH')) {
+            throw new SkipTest('this imagick build has no list-length resource limit');
+        }
+
+        $previous = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH);
+        \Imagick::setResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH, 2);
+
+        try {
+            $processed = (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: 2_000_000))->process(
+                (new Psr17Factory())->createStream($bytes),
+                'image/gif',
+                new Preset(name: 'thumb', format: Format::Png, width: 50),
+            );
+        } finally {
+            \Imagick::setResourceLimit(
+                \Imagick::RESOURCETYPE_LISTLENGTH,
+                $previous >= (float) \PHP_INT_MAX ? \PHP_INT_MAX : (int) $previous,
+            );
+        }
+
+        Assert::same([$processed->width, $processed->height], [50, 50]);
+    }
+
+    /**
+     * Review 1.0 pass 2, N2: ImageMagick's WebP coder ignores the `[0]` scene
+     * selector and decodes every frame before keeping one, so the list-length
+     * limit of 2 refused every animated WebP. A legitimate animation is a
+     * still of its first frame again.
+     */
+    public function anAnimatedWebpYieldsItsFirstFrame(): void
+    {
+        $this->requireExtension();
+        $this->requireWebp();
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: 2_000_000))->process(
+            (new Psr17Factory())->createStream($this->animatedWebp(3, 300, 300)),
+            'image/webp',
+            new Preset(name: 'still', format: Format::Png, width: 30),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+
+        Assert::same($out->getNumberImages(), 1);
+        Assert::same([$processed->width, $processed->height], [30, 30]);
+        // Lossy WebP: red within a few levels, not exactly.
+        $pixel = $out->getImagePixelColor(15, 15)->getColor();
+        Assert::true($pixel['r'] > 240 && $pixel['g'] < 16 && $pixel['b'] < 16, 'not the red first frame: ' . json_encode($pixel));
+    }
+
+    /**
+     * The other half of N2: the WebP coder decoded every frame however the
+     * list-length limit stood, and builds without that limit decoded them
+     * all (forty 400x400 frames are 6.4 MP under a 2 MP cap). Only the first
+     * frame is decoded now: the run succeeds under an ImageMagick list-length
+     * limit of 2 set by the application.
+     */
+    public function aLongWebpAnimationDecodesOnlyItsFirstFrame(): void
+    {
+        $this->requireExtension();
+        $this->requireWebp();
+        if (!\defined('Imagick::RESOURCETYPE_LISTLENGTH')) {
+            throw new SkipTest('this imagick build has no list-length resource limit');
+        }
+
+        $bytes = $this->animatedWebp(40, 400, 400);
+        $previous = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH);
+        \Imagick::setResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH, 2);
+
+        try {
+            $processed = (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: 2_000_000))->process(
+                (new Psr17Factory())->createStream($bytes),
+                'image/webp',
+                new Preset(name: 'still', format: Format::Png, width: 30),
+            );
+        } finally {
+            \Imagick::setResourceLimit(
+                \Imagick::RESOURCETYPE_LISTLENGTH,
+                $previous >= (float) \PHP_INT_MAX ? \PHP_INT_MAX : (int) $previous,
+            );
+        }
+
+        Assert::same([$processed->width, $processed->height], [30, 30]);
+    }
+
+    /**
+     * A first frame smaller than the canvas sits where the animation shows
+     * it: a 100x100 red frame at (100, 100) on a 300x300 canvas comes out
+     * red in the middle and transparent in the corner.
+     */
+    public function aWebpFirstFrameIsPlacedOnItsCanvas(): void
+    {
+        $this->requireExtension();
+        $this->requireWebp();
+
+        $still = new \Imagick();
+        $still->newImage(100, 100, new \ImagickPixel('red'), 'WEBP');
+        $still->setOption('webp:lossless', 'true');
+        $frame = Webp::frameData($still->getImageBlob());
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory()))->process(
+            (new Psr17Factory())->createStream(Webp::animation(300, 300, [[$frame, 100, 100, 100, 100]])),
+            'image/webp',
+            new Preset(name: 'still', format: Format::Png, width: 300),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+
+        Assert::same([$processed->width, $processed->height], [300, 300]);
+        $centre = $out->getImagePixelColor(150, 150)->getColor();
+        Assert::same([$centre['r'], $centre['g'], $centre['b']], $this->rgb('red'));
+        Assert::same($out->getImagePixelColor(10, 10)->getColor(1)['a'], 0.0);
+    }
+
+    /**
+     * The coder is the detected media type's, never ImageMagick's own guess
+     * from the bytes: a file whose bytes say PNG under a GIF row is refused
+     * rather than handed to whichever coder its magic number selects — the
+     * route by which MVG, MSL and friends reach a decoder.
+     */
+    public function bytesOfAnotherFormatThanTheMediaTypeAreRefused(): void
+    {
+        $this->requireExtension();
+
+        Expect::exception(ProcessingFailedException::class);
+
+        (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource(8, 8),
+            'image/gif',
+            new Preset(name: 'thumb', format: Format::Png, width: 4),
+        );
+    }
+
+    /**
+     * The decoder limits are process-wide ImageMagick state. They are
+     * narrowed for the read and put back, so neither the application's own
+     * Imagick use nor the next request inherits this file's frame size.
+     */
+    public function theProcessWideDecoderLimitsArePutBack(): void
+    {
+        $this->requireExtension();
+
+        $limits = [\Imagick::RESOURCETYPE_WIDTH, \Imagick::RESOURCETYPE_HEIGHT];
+        if (\defined('Imagick::RESOURCETYPE_LISTLENGTH')) {
+            $limits[] = \Imagick::RESOURCETYPE_LISTLENGTH;
+        }
+        $before = array_map(\Imagick::getResourceLimit(...), $limits);
+
+        (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource(40, 20),
+            'image/png',
+            new Preset(name: 'thumb', format: Format::Png, width: 10),
+        );
+
+        Assert::same(array_map(\Imagick::getResourceLimit(...), $limits), $before);
+    }
+
+    /**
+     * A failed read puts them back too.
+     */
+    public function theDecoderLimitsArePutBackAfterAFailedRead(): void
+    {
+        $this->requireExtension();
+
+        $before = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH);
+
+        try {
+            (new ImagickImageProcessor(new Psr17Factory()))->process(
+                (new Psr17Factory())->createStream(Png::header(width: 4, height: 4) . 'garbage'),
+                'image/png',
+                new Preset(name: 'thumb', format: Format::Png, width: 2),
+            );
+        } catch (ProcessingFailedException) {
+        }
+
+        Assert::same(\Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH), $before);
+    }
+
+    /**
+     * A `policy.xml` that forbids the source's coder is a verdict about the
+     * installation, not about the file: an unsupported source (a skip for
+     * `filestorage:warm`), not a processing failure.
+     */
+    public function aPolicyThatForbidsTheCoderIsAnUnsupportedSource(): void
+    {
+        $this->requireExtension();
+
+        $image = new \Imagick();
+        $image->newImage(8, 8, 'orange', 'GIF');
+
+        Assert::same(
+            ImagickPolicy::run(
+                'GIF',
+                'new ' . ImagickImageProcessor::class . '(new ' . Psr17Factory::class . '())',
+                'image/gif',
+                $image->getImageBlob(),
+            ),
+            UnsupportedSourceException::class,
+        );
+    }
+
     public function failsOnBytesThatDoNotDecode(): void
     {
         $this->requireExtension();
@@ -261,6 +548,243 @@ final class ImagickImageProcessorTest
         );
     }
 
+
+    /**
+     * A side of one pixel is a dimension: the ping and the read both accept
+     * it, and contain keeps it.
+     *
+     * @return iterable<string, array{int, int}>
+     */
+    public static function singlePixelSideProvider(): iterable
+    {
+        yield 'one pixel wide' => [1, 5];
+        yield 'one pixel tall' => [5, 1];
+    }
+
+    #[DataProvider('singlePixelSideProvider')]
+    public function aSinglePixelSideIsProcessed(int $width, int $height): void
+    {
+        $this->requireExtension();
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource($width, $height),
+            'image/png',
+            new Preset(name: 'thumb', format: Format::Png, width: 100, height: 100),
+        );
+
+        Assert::same([$processed->width, $processed->height], [$width, $height]);
+    }
+
+    /**
+     * The cap is inclusive at the ping as at the header guard, and zero
+     * means no cap at all.
+     *
+     * @return iterable<string, array{int<0, max>}>
+     */
+    public static function pixelCapProvider(): iterable
+    {
+        yield 'exactly at the cap' => [800];
+        yield 'no cap' => [0];
+    }
+
+    /**
+     * @param int<0, max> $cap
+     */
+    #[DataProvider('pixelCapProvider')]
+    public function aSourceWithinThePixelCapIsProcessed(int $cap): void
+    {
+        $this->requireExtension();
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: $cap))->process(
+            $this->pngSource(40, 20),
+            'image/png',
+            new Preset(name: 'thumb', format: Format::Png, width: 10),
+        );
+
+        Assert::same([$processed->width, $processed->height], [10, 5]);
+    }
+
+    /**
+     * Cropped at full scale — the resize changes nothing, so nothing of the
+     * crop's offset or the original canvas can be scaled away: the output's
+     * page is exactly its own image.
+     */
+    public function anUnscaledCropCarriesNoPageGeometry(): void
+    {
+        $this->requireExtension();
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->bandPngSource(width: 400, height: 200),
+            'image/png',
+            new Preset(name: 'sq', format: Format::Gif, width: 200, height: 200, fit: Fit::Cover),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+
+        Assert::same($out->getImagePage(), ['width' => 200, 'height' => 200, 'x' => 0, 'y' => 0]);
+    }
+
+    /**
+     * ImageMagick keeps profiles across a re-encode: the EXIF block of the
+     * original — where a phone keeps its GPS position — has to be dropped.
+     */
+    public function theRenditionCarriesNoMetadataProfile(): void
+    {
+        $this->requireExtension();
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->orientedJpegSource(width: 40, height: 20, orientation: 1),
+            'image/jpeg',
+            new Preset(name: 'thumb', format: Format::Jpeg, width: 20),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+
+        Assert::same($out->getImageProfiles('*', false), []);
+    }
+
+    /**
+     * The orientation is applied to the pixels, and the rendition says so:
+     * a tag still claiming "rotate 90" would make a viewer turn the upright
+     * output a second time.
+     */
+    public function anAppliedOrientationIsNotDeclaredAgain(): void
+    {
+        $this->requireExtension();
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->orientedJpegSource(width: 40, height: 20, orientation: 6),
+            'image/jpeg',
+            new Preset(name: 'oriented', format: Format::Png, width: 20),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+        $orientation = $out->getImageOrientation();
+
+        Assert::true($orientation === 0 || $orientation === 1, "declared orientation {$orientation}");
+    }
+
+    /**
+     * The preset's quality reaches the encoder: a JPEG rendition is written
+     * with it (ImageMagick reads it back from the quantisation tables).
+     */
+    public function theJpegIsEncodedAtThePresetQuality(): void
+    {
+        $this->requireExtension();
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource(40, 20),
+            'image/png',
+            new Preset(name: 'thumb', format: Format::Jpeg, width: 20, quality: 37),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+
+        Assert::same($out->getImageCompressionQuality(), 37);
+    }
+
+    /**
+     * @return iterable<string, array{int, int, int, int}>
+     */
+    public static function frameSharingOneCanvasSideProvider(): iterable
+    {
+        yield 'full width, lower half' => [300, 150, 0, 150];
+        yield 'full height, right half' => [150, 300, 150, 0];
+    }
+
+    /**
+     * A first frame as wide (or as tall) as the canvas, but not both, is
+     * still smaller than the canvas and is placed on it.
+     */
+    #[DataProvider('frameSharingOneCanvasSideProvider')]
+    public function aWebpFrameSharingOneCanvasSideIsPlacedOnIt(int $width, int $height, int $x, int $y): void
+    {
+        $this->requireExtension();
+        $this->requireWebp();
+
+        $still = new \Imagick();
+        $still->newImage($width, $height, new \ImagickPixel('red'), 'WEBP');
+        $still->setOption('webp:lossless', 'true');
+        $frame = Webp::frameData($still->getImageBlob());
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory()))->process(
+            (new Psr17Factory())->createStream(Webp::animation(300, 300, [[$frame, $x, $y, $width, $height]])),
+            'image/webp',
+            new Preset(name: 'still', format: Format::Png, width: 300),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+
+        Assert::same([$processed->width, $processed->height], [300, 300]);
+        Assert::same($out->getImagePixelColor(10, 10)->getColor(1)['a'], 0.0);
+        $inside = $out->getImagePixelColor(290, 290)->getColor();
+        Assert::same([$inside['r'], $inside['g'], $inside['b']], $this->rgb('red'));
+    }
+
+    /**
+     * @return iterable<string, array{int}>
+     */
+    public static function applicationLimitProvider(): iterable
+    {
+        yield 'a finite limit' => [1_000_000];
+        yield 'the largest limit' => [\PHP_INT_MAX];
+    }
+
+    /**
+     * Put back means the application's own value, whatever it is — not
+     * "unlimited", and not an overflowed cast of the largest one.
+     */
+    #[DataProvider('applicationLimitProvider')]
+    public function theApplicationsOwnDecoderLimitIsPutBack(int $limit): void
+    {
+        $this->requireExtension();
+
+        $previous = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH);
+        \Imagick::setResourceLimit(\Imagick::RESOURCETYPE_WIDTH, $limit);
+        $before = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH);
+
+        try {
+            (new ImagickImageProcessor(new Psr17Factory()))->process(
+                $this->pngSource(40, 20),
+                'image/png',
+                new Preset(name: 'thumb', format: Format::Png, width: 10),
+            );
+            $after = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_WIDTH);
+        } finally {
+            \Imagick::setResourceLimit(
+                \Imagick::RESOURCETYPE_WIDTH,
+                $previous >= (float) \PHP_INT_MAX ? \PHP_INT_MAX : (int) $previous,
+            );
+        }
+
+        Assert::same($after, $before);
+    }
+
+    private function requireWebp(): void
+    {
+        if (\Imagick::queryFormats('WEBP') === []) {
+            throw new SkipTest('this ImageMagick has no WebP coder');
+        }
+    }
+
+    /**
+     * An animated WebP whose first frame is red and the others blue.
+     */
+    private function animatedWebp(int $frames, int $width, int $height): string
+    {
+        $animation = new \Imagick();
+        for ($i = 0; $i < $frames; $i++) {
+            $animation->newImage($width, $height, new \ImagickPixel($i === 0 ? 'red' : 'blue'), 'WEBP');
+        }
+        $animation->setFormat('WEBP');
+
+        return $animation->getImagesBlob();
+    }
 
     private function requireExtension(): void
     {
