@@ -160,13 +160,15 @@ final readonly class WebpFirstFrame
     }
 
     /**
-     * @return int<0, max> Three bytes, so at most 0xFFFFFF; psalm 7.0 (the
-     *         prefer-lowest job) cannot carry the upper bound through the
-     *         shifts, so only the sign is declared.
+     * Three little-endian bytes, so 0..0xFFFFFF. `max(0, …)` changes nothing at
+     * runtime; it is how psalm 7.0 (the prefer-lowest job), which infers no
+     * range through the shifts, sees that the result is never negative.
+     *
+     * @return int<0, max>
      */
     private static function uint24(string $bytes, int $offset): int
     {
-        return \ord($bytes[$offset]) | (\ord($bytes[$offset + 1]) << 8) | (\ord($bytes[$offset + 2]) << 16);
+        return max(0, \ord($bytes[$offset]) | (\ord($bytes[$offset + 1]) << 8) | (\ord($bytes[$offset + 2]) << 16));
     }
 
     private static function pack24(int $value): string
