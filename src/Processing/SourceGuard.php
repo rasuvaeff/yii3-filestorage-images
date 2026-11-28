@@ -41,7 +41,7 @@ final readonly class SourceGuard
                     break;
                 }
 
-                throw new ProcessingFailedException('Source stream stalled before EOF');
+                throw ProcessingFailedException::transient('Source stream stalled before EOF');
             }
             $bytes .= $chunk;
             if ($maxBytes > 0 && \strlen($bytes) > $maxBytes) {

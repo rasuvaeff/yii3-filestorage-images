@@ -15,6 +15,7 @@ use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Pdf;
 use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Core\Exception\SkipTest;
+use Testo\Data\DataProvider;
 use Testo\Expect;
 use Testo\Test;
 
@@ -132,11 +133,11 @@ final class PdfPreviewProcessorTest
      * Review 1.0 #13 asked whether the DPI comes from the last page instead
      * of the rendered one. Measured: ImageMagick's PDF coder takes the page
      * box from a scan of the whole file before ghostscript runs, so even a
-     * ping of `[0]` reports the largest box — 2000x2000 here, for a 200x100
-     * first page. That is an upper bound: the render can come out smaller
-     * than the cap allows, never larger. Pinned so the conservative reading
-     * is a decision, not an accident: one oversized page refuses the
-     * document's preview.
+     * ping of `[0]` reports the largest direct box — 2000x2000 here, for a
+     * 200x100 first page. Pinned so the conservative reading is a decision,
+     * not an accident: one oversized page refuses the document's preview.
+     * (Boxes the scan cannot see at all are pass 2 N1, bounded by
+     * `pdf:fit-page` — see `aPageThePingMisreadsStillRendersUnderTheCap`.)
      */
     public function theRenderGeometryIsTheLargestPageBoxInTheDocument(): void
     {
@@ -341,6 +342,41 @@ final class PdfPreviewProcessorTest
         // 1000-wide box refuses to upscale, so the raster IS the output.
         Assert::true($processed->width > 210 && $processed->width < 240, "render DPI did not follow the cap: {$processed->width}");
         Assert::true($processed->height > 105 && $processed->height < 120, "render DPI did not follow the cap: {$processed->height}");
+    }
+
+    /**
+     * Review 1.0 pass 2, N1: the pinged geometry is not the page ghostscript
+     * renders. An indirect `/MediaBox` pings as letter size (611x791) while
+     * the referenced box is 2000x2000 points; the render must still stay
+     * under the pixel cap. The preset refuses to upscale, so the output is
+     * the raster itself.
+     */
+    #[DataProvider('pagesThePingMisreads')]
+    public function aPageThePingMisreadsStillRendersUnderTheCap(string $pdf): void
+    {
+        if (!$this->available()) {
+            throw new SkipTest('the imagick PDF delegate is not available');
+        }
+        if (getenv('SKIP_PDF_RENDERS')) {
+            throw new SkipTest('PDF renders under Infection are the local gate\'s job');
+        }
+
+        $processed = (new PdfPreviewProcessor(new Psr17Factory(), maxSourcePixels: 1_000_000))->process(
+            $this->stream($pdf),
+            'application/pdf',
+            new Preset(name: 'x', format: Format::Png, width: 10_000, upscale: false),
+        );
+
+        Assert::true(
+            $processed->width * $processed->height <= 1_000_000,
+            "the render escaped the pixel cap: {$processed->width}x{$processed->height}",
+        );
+    }
+
+    public static function pagesThePingMisreads(): iterable
+    {
+        yield 'indirect MediaBox' => [Pdf::indirectMediaBox(2000, 2000)];
+        yield 'UserUnit' => [Pdf::userUnit(300, 300, 4)];
     }
 
     /** Garbage that carries the PDF media type fails as a processing error, not a crash. */

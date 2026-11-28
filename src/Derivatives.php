@@ -51,8 +51,11 @@ use Yiisoft\Mutex\MutexFactoryInterface;
  * the preset's cap), keyed by the physical rendition and the original's
  * version, for `failureTtl`. Without it a source that always fails was read
  * and decoded again on every request, each one queueing behind the lock — a
- * DoS amplifier (review 1.0 #10). A missing original or a store error is
- * never remembered: it may be gone a second later.
+ * DoS amplifier (review 1.0 #10). A missing original, a store error or a
+ * transient processing failure (a stalled stream, ImageMagick out of
+ * resources — {@see ProcessingFailedException::isTransient()}) is never
+ * remembered: it may be gone a second later. A cache that throws is treated
+ * as no cache — a miss on read, nothing on write.
  *
  * @api
  */
@@ -91,6 +94,32 @@ final readonly class Derivatives implements DerivativeResolverInterface
         private ?CacheInterface $failures = null,
         private DateInterval $failureTtl = new DateInterval('PT5M'),
     ) {}
+
+    /**
+     * The same facade minting proxy URLs through another generator. The
+     * shared one reads the tenant from the current request; a URL minted
+     * outside it — a queue job, a mail — needs one pinned to the tenant the
+     * file belongs to, e.g. `-web`'s `HmacProxyUrlGenerator::forScope()`
+     * (review 1.0 pass 2, N10). `Srcset::for()` over the returned facade
+     * mints its candidates the same way.
+     */
+    public function withProxyUrls(?ProxyUrlGeneratorInterface $proxyUrls): self
+    {
+        return new self(
+            stores: $this->stores,
+            presets: $this->presets,
+            processor: $this->processor,
+            mutexes: $this->mutexes,
+            deliveryPolicies: $this->deliveryPolicies,
+            clock: $this->clock,
+            defaultUrlTtl: $this->defaultUrlTtl,
+            lockTimeoutSeconds: $this->lockTimeoutSeconds,
+            maxSourceBytes: $this->maxSourceBytes,
+            proxyUrls: $proxyUrls,
+            failures: $this->failures,
+            failureTtl: $this->failureTtl,
+        );
+    }
 
     /**
      * The physical identity a preset name resolves to. What `-web` and the
@@ -329,12 +358,15 @@ final readonly class Derivatives implements DerivativeResolverInterface
         File $file,
         DerivativeDescriptor $descriptor,
     ): string {
-        return 'filestorage-images.failed.' . hash('sha256', implode("\0", [
+        // PSR-16 guarantees keys of up to 64 characters from A-Z a-z 0-9 _ .
+        // only (review 1.0 pass 2, N15): a 13-character prefix and 192 bits
+        // of the hash.
+        return 'fsimg.failed.' . substr(hash('sha256', implode("\0", [
             $file->storeName,
             $store->layout()->derivativePath($file, $descriptor),
             $file->updatedAt->format('U.u'),
             $file->contentHash ?? '',
-        ]));
+        ])), 0, 48);
     }
 
     /**
@@ -348,7 +380,14 @@ final readonly class Derivatives implements DerivativeResolverInterface
             return;
         }
 
-        $entry = $this->failures->get($key);
+        try {
+            $entry = $this->failures->get($key);
+        } catch (\Throwable) {
+            // The cache is optional: one that is down (Redis gone) is a miss,
+            // never the reason a rendition is not served (review 1.0 pass 2,
+            // N7).
+            return;
+        }
         if (!\is_array($entry) || !\is_string($entry['kind'] ?? null) || !\is_string($entry['message'] ?? null)) {
             return;
         }
@@ -366,14 +405,25 @@ final readonly class Derivatives implements DerivativeResolverInterface
         string $key,
         UnsupportedSourceException|ProcessingFailedException|SizeLimitExceededException $failure,
     ): void {
-        $this->failures?->set($key, [
-            'kind' => match (true) {
-                $failure instanceof UnsupportedSourceException => 'unsupported',
-                $failure instanceof ProcessingFailedException => 'failed',
-                default => 'size',
-            },
-            'message' => $failure->getMessage(),
-        ], $this->failureTtl);
+        if (!$this->failures instanceof CacheInterface
+            || ($failure instanceof ProcessingFailedException && $failure->isTransient())
+        ) {
+            return;
+        }
+
+        try {
+            $this->failures->set($key, [
+                'kind' => match (true) {
+                    $failure instanceof UnsupportedSourceException => 'unsupported',
+                    $failure instanceof ProcessingFailedException => 'failed',
+                    default => 'size',
+                },
+                'message' => $failure->getMessage(),
+            ], $this->failureTtl);
+        } catch (\Throwable) {
+            // A cache that cannot be written must not replace the
+            // generation's own failure, which the caller is about to get.
+        }
     }
 
     /**

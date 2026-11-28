@@ -86,6 +86,28 @@ final class SourceGuardTest
         SourceGuard::readBounded(new StallingStream(), maxBytes: 0);
     }
 
+    /** A stalled stream says nothing about the file: transient, never remembered (review 1.0 pass 2, N8). */
+    public function aStalledStreamIsTransient(): void
+    {
+        try {
+            SourceGuard::readBounded(new StallingStream(), maxBytes: 0);
+            Assert::fail('a stalled stream must fail');
+        } catch (ProcessingFailedException $e) {
+            Assert::true($e->isTransient());
+        }
+    }
+
+    /** An empty source is a property of the file. */
+    public function anEmptySourceIsNotTransient(): void
+    {
+        try {
+            SourceGuard::readBounded((new Psr17Factory())->createStream(''), maxBytes: 0);
+            Assert::fail('an empty source must fail');
+        } catch (ProcessingFailedException $e) {
+            Assert::false($e->isTransient());
+        }
+    }
+
     public function readsDimensionsFromTheHeaderAlone(): void
     {
         // The bytes carry no pixel data at all — dimensions still resolve,

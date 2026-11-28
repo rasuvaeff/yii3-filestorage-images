@@ -96,6 +96,10 @@ class Imagick
 
     public function setImageAlphaChannel(int $mode): bool {}
 
+    public function extentImage(int $width, int $height, int $x, int $y): bool {}
+
+    public function setOption(string $key, string $value): bool {}
+
     public function stripImage(): bool {}
 
     public function setImageFormat(string $format): bool {}

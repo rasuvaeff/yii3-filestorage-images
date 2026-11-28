@@ -87,4 +87,41 @@ final class Pdf
             '6 0 obj ' . self::stream(' ') . ' endobj',
         ]);
     }
+
+    /**
+     * A page whose real size ImageMagick's ping cannot see: the MediaBox is
+     * an indirect reference, which the PDF coder's scan of the raw text does
+     * not resolve (it reports its letter-size default), while ghostscript
+     * renders the referenced box (review 1.0 pass 2, N1).
+     *
+     * @return non-empty-string
+     */
+    public static function indirectMediaBox(int $width, int $height): string
+    {
+        return self::build([
+            '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+            '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+            '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox 5 0 R'
+                . ' /Resources << /ProcSet [/PDF] >> /Contents 4 0 R >> endobj',
+            '4 0 obj ' . self::stream(' ') . ' endobj',
+            "5 0 obj [0 0 {$width} {$height}] endobj",
+        ]);
+    }
+
+    /**
+     * A page whose `/UserUnit` multiplies its box: ImageMagick's ping ignores
+     * the unit, ghostscript honours it (review 1.0 pass 2, N1).
+     *
+     * @return non-empty-string
+     */
+    public static function userUnit(int $width, int $height, int $unit): string
+    {
+        return self::build([
+            '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+            '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj',
+            "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {$width} {$height}] /UserUnit {$unit}"
+                . ' /Resources << /ProcSet [/PDF] >> /Contents 4 0 R >> endobj',
+            '4 0 obj ' . self::stream(' ') . ' endobj',
+        ]);
+    }
 }

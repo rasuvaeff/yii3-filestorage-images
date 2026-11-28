@@ -12,13 +12,22 @@ use Rasuvaeff\Yii3FilestorageImages\Exception\UnsupportedSourceException;
  * Maps an ImageMagick error to the package's verdict. A `policy.xml` refusal
  * (ImageMagick's `PolicyError`, code 499) says the installation will never
  * process this coder — an unsupported source, which `filestorage:warm` counts
- * as a skip; everything else is a file that did not decode.
+ * as a skip; a corrupt image or a coder error is a file that did not decode;
+ * everything else is a transient processing failure.
  *
  * @internal
  */
 final readonly class ImagickFailure
 {
     private const int POLICY_ERROR = 499;
+
+    /**
+     * ImageMagick severities that are a verdict on the bytes: CorruptImage
+     * and Coder, as warning (3xx) and error (4xx). Everything else — resource
+     * limits, the pixel cache, a delegate that died, a file that could not be
+     * opened — can pass by itself and is transient (review 1.0 pass 2, N8).
+     */
+    private const array ABOUT_THE_FILE = [325, 350, 425, 450];
 
     public static function from(
         ImagickException $exception,
@@ -31,6 +40,10 @@ final readonly class ImagickFailure
             );
         }
 
-        return new ProcessingFailedException("{$context}: {$exception->getMessage()}", previous: $exception);
+        $message = "{$context}: {$exception->getMessage()}";
+
+        return \in_array($exception->getCode(), self::ABOUT_THE_FILE, strict: true)
+            ? new ProcessingFailedException($message, previous: $exception)
+            : ProcessingFailedException::transient($message, $exception);
     }
 }

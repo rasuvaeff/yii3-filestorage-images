@@ -13,6 +13,7 @@ use Rasuvaeff\Yii3FilestorageImages\Preset;
 use Rasuvaeff\Yii3FilestorageImages\Processing\ImagickImageProcessor;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\ImagickPolicy;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Png;
+use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Webp;
 use Testo\Assert;
 use Testo\Codecov\Covers;
 use Testo\Core\Exception\SkipTest;
@@ -318,6 +319,98 @@ final class ImagickImageProcessorTest
     }
 
     /**
+     * Review 1.0 pass 2, N2: ImageMagick's WebP coder ignores the `[0]` scene
+     * selector and decodes every frame before keeping one, so the list-length
+     * limit of 2 refused every animated WebP. A legitimate animation is a
+     * still of its first frame again.
+     */
+    public function anAnimatedWebpYieldsItsFirstFrame(): void
+    {
+        $this->requireExtension();
+        $this->requireWebp();
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: 2_000_000))->process(
+            (new Psr17Factory())->createStream($this->animatedWebp(3, 300, 300)),
+            'image/webp',
+            new Preset(name: 'still', format: Format::Png, width: 30),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+
+        Assert::same($out->getNumberImages(), 1);
+        Assert::same([$processed->width, $processed->height], [30, 30]);
+        // Lossy WebP: red within a few levels, not exactly.
+        $pixel = $out->getImagePixelColor(15, 15)->getColor();
+        Assert::true($pixel['r'] > 240 && $pixel['g'] < 16 && $pixel['b'] < 16, 'not the red first frame: ' . json_encode($pixel));
+    }
+
+    /**
+     * The other half of N2: the WebP coder decoded every frame however the
+     * list-length limit stood, and builds without that limit decoded them
+     * all (forty 400x400 frames are 6.4 MP under a 2 MP cap). Only the first
+     * frame is decoded now: the run succeeds under an ImageMagick list-length
+     * limit of 2 set by the application.
+     */
+    public function aLongWebpAnimationDecodesOnlyItsFirstFrame(): void
+    {
+        $this->requireExtension();
+        $this->requireWebp();
+        if (!\defined('Imagick::RESOURCETYPE_LISTLENGTH')) {
+            throw new SkipTest('this imagick build has no list-length resource limit');
+        }
+
+        $bytes = $this->animatedWebp(40, 400, 400);
+        $previous = \Imagick::getResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH);
+        \Imagick::setResourceLimit(\Imagick::RESOURCETYPE_LISTLENGTH, 2);
+
+        try {
+            $processed = (new ImagickImageProcessor(new Psr17Factory(), maxSourcePixels: 2_000_000))->process(
+                (new Psr17Factory())->createStream($bytes),
+                'image/webp',
+                new Preset(name: 'still', format: Format::Png, width: 30),
+            );
+        } finally {
+            \Imagick::setResourceLimit(
+                \Imagick::RESOURCETYPE_LISTLENGTH,
+                $previous >= (float) \PHP_INT_MAX ? \PHP_INT_MAX : (int) $previous,
+            );
+        }
+
+        Assert::same([$processed->width, $processed->height], [30, 30]);
+    }
+
+    /**
+     * A first frame smaller than the canvas sits where the animation shows
+     * it: a 100x100 red frame at (100, 100) on a 300x300 canvas comes out
+     * red in the middle and transparent in the corner.
+     */
+    public function aWebpFirstFrameIsPlacedOnItsCanvas(): void
+    {
+        $this->requireExtension();
+        $this->requireWebp();
+
+        $still = new \Imagick();
+        $still->newImage(100, 100, new \ImagickPixel('red'), 'WEBP');
+        $still->setOption('webp:lossless', 'true');
+        $frame = Webp::frameData($still->getImageBlob());
+
+        $processed = (new ImagickImageProcessor(new Psr17Factory()))->process(
+            (new Psr17Factory())->createStream(Webp::animation(300, 300, [[$frame, 100, 100, 100, 100]])),
+            'image/webp',
+            new Preset(name: 'still', format: Format::Png, width: 300),
+        );
+
+        $out = new \Imagick();
+        $out->readImageBlob((string) $processed->stream);
+
+        Assert::same([$processed->width, $processed->height], [300, 300]);
+        $centre = $out->getImagePixelColor(150, 150)->getColor();
+        Assert::same([$centre['r'], $centre['g'], $centre['b']], $this->rgb('red'));
+        Assert::same($out->getImagePixelColor(10, 10)->getColor(1)['a'], 0.0);
+    }
+
+    /**
      * The coder is the detected media type's, never ImageMagick's own guess
      * from the bytes: a file whose bytes say PNG under a GIF row is refused
      * rather than handed to whichever coder its magic number selects — the
@@ -417,6 +510,27 @@ final class ImagickImageProcessorTest
         );
     }
 
+
+    private function requireWebp(): void
+    {
+        if (\Imagick::queryFormats('WEBP') === []) {
+            throw new SkipTest('this ImageMagick has no WebP coder');
+        }
+    }
+
+    /**
+     * An animated WebP whose first frame is red and the others blue.
+     */
+    private function animatedWebp(int $frames, int $width, int $height): string
+    {
+        $animation = new \Imagick();
+        for ($i = 0; $i < $frames; $i++) {
+            $animation->newImage($width, $height, new \ImagickPixel($i === 0 ? 'red' : 'blue'), 'WEBP');
+        }
+        $animation->setFormat('WEBP');
+
+        return $animation->getImagesBlob();
+    }
 
     private function requireExtension(): void
     {

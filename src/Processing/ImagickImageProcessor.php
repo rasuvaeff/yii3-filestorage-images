@@ -80,6 +80,14 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
         // decompression bomb the guard exists for.
         SourceGuard::dimensions($bytes, $this->maxSourcePixels);
 
+        // ImageMagick's WebP coder ignores the `[0]` selector below and
+        // decodes every frame of an animation (review 1.0 pass 2, N2): the
+        // first frame is cut out of the container and decoded as a still.
+        $webpFrame = $sourceMediaType === 'image/webp' ? WebpFirstFrame::of($bytes) : null;
+        if ($webpFrame instanceof \Rasuvaeff\Yii3FilestorageImages\Processing\WebpFirstFrame) {
+            $bytes = $webpFrame->still;
+        }
+
         // The coder comes from the detected media type, never from
         // ImageMagick's own sniffing of the bytes, and `[0]` selects the
         // first frame at read time: a derivative is a still, and decoding
@@ -95,6 +103,9 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
         try {
             try {
                 $this->read($image, $bytes, $selector, $frameWidth, $frameHeight);
+                if ($webpFrame instanceof \Rasuvaeff\Yii3FilestorageImages\Processing\WebpFirstFrame) {
+                    $this->placeOnCanvas($image, $webpFrame);
+                }
 
                 // Orient first, then measure: rotation swaps width and height,
                 // and the geometry has to see the image the viewer will.
@@ -129,7 +140,7 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
             }
 
             if ($blob === '') {
-                throw new ProcessingFailedException('Imagick produced an empty encoded image');
+                throw ProcessingFailedException::transient('Imagick produced an empty encoded image');
             }
 
             return new ProcessedImage(
@@ -190,7 +201,8 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
      * Reads the one frame with ImageMagick's own limits narrowed to what the
      * ping declared: no wider or taller than that frame, no second image in
      * the list. Defence in depth for a coder whose read disagrees with its
-     * ping. The limits are process-wide state, so they are only ever lowered,
+     * ping — skipped under ZTS, where the limits are shared between threads.
+     * The limits are process-wide state, so they are only ever lowered,
      * and put back as soon as the read returns — the application's own
      * Imagick use, and the next file, must not inherit them. (The area and
      * memory limits are not used: past them ImageMagick 7 moves the pixel
@@ -203,12 +215,18 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
      */
     private function read(Imagick $image, string $bytes, string $selector, int $width, int $height): void
     {
-        $narrowed = [
+        // Under a threaded runtime (ZTS: FrankenPHP, a threaded RoadRunner
+        // plugin) the limits are shared by every thread of the process, and a
+        // width narrowed for this read would refuse another thread's
+        // legitimate one (review 1.0 pass 2, N9). There the first-frame
+        // selector and the ping guards stand without this second line.
+        $threaded = (bool) \constant('PHP_ZTS');
+        $narrowed = $threaded ? [] : [
             Imagick::RESOURCETYPE_WIDTH => $width,
             Imagick::RESOURCETYPE_HEIGHT => $height,
         ];
         // Newer than width/height: absent from older imagick builds.
-        if (\defined('Imagick::RESOURCETYPE_LISTLENGTH')) {
+        if (!$threaded && \defined('Imagick::RESOURCETYPE_LISTLENGTH')) {
             // Two, not one: ImageMagick refuses a list whose length reaches
             // the limit, so one would refuse the single frame itself.
             $narrowed[Imagick::RESOURCETYPE_LISTLENGTH] = 2;
@@ -234,6 +252,24 @@ final readonly class ImagickImageProcessor implements ImageProcessorInterface
                 Imagick::setResourceLimit($type, $limit >= (float) \PHP_INT_MAX ? \PHP_INT_MAX : (int) $limit);
             }
         }
+    }
+
+    /**
+     * A first frame smaller than the animation's canvas is placed where the
+     * animation shows it, on a transparent canvas — the still a viewer sees
+     * before the second frame. The canvas was already measured against the
+     * pixel cap by the header guard.
+     *
+     * @throws ImagickException
+     */
+    private function placeOnCanvas(Imagick $image, WebpFirstFrame $frame): void
+    {
+        if ($image->getImageWidth() === $frame->canvasWidth && $image->getImageHeight() === $frame->canvasHeight) {
+            return;
+        }
+
+        $image->setImageBackgroundColor('transparent');
+        $image->extentImage($frame->canvasWidth, $frame->canvasHeight, -$frame->x, -$frame->y);
     }
 
     /**

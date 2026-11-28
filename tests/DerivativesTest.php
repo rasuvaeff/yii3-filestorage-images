@@ -7,6 +7,7 @@ namespace Rasuvaeff\Yii3FilestorageImages\Tests;
 use DateInterval;
 use Psr\SimpleCache\CacheInterface;
 use Rasuvaeff\Understudy\Arg;
+use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\Exception\UploadSizeException;
 use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
@@ -47,6 +48,7 @@ use Yiisoft\Test\Support\SimpleCache\MemorySimpleCache;
 use Yiisoft\Test\Support\SimpleCache\SimpleCacheActionLogger;
 
 use function Rasuvaeff\Understudy\verify;
+use function Rasuvaeff\Understudy\when;
 
 #[Test]
 #[Covers(Derivatives::class)]
@@ -445,6 +447,71 @@ final class DerivativesTest
     }
 
     /**
+     * Review 1.0 pass 2, N7: the failure cache is optional. A cache that
+     * throws (Redis down) is a miss on read and a no-op on write — the
+     * rendition is generated and served, never a 500.
+     */
+    public function aBrokenFailureCacheIsNoCache(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        $this->derivatives(failures: $this->brokenCache())->ensure($file, 'thumb');
+
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), times: 1);
+    }
+
+    /** N7: a cache that fails on write does not replace the generation's own failure. */
+    public function aBrokenFailureCacheKeepsTheRealFailure(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        Expect::exception(ProcessingFailedException::class)->withMessageContaining('does not decode');
+
+        $this->derivatives(
+            processor: Doubles::failingProcessor(new ProcessingFailedException('does not decode')),
+            failures: $this->brokenCache(),
+        )->ensure($file, 'thumb');
+    }
+
+    /** N7: `urlFor()` consults the failure cache on its proxy path; a broken one is a miss there too. */
+    public function aBrokenFailureCacheStillMintsTheProxyUrl(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+
+        $url = $this->derivatives(proxyUrls: new SignedProxyUrlGenerator(), failures: $this->brokenCache())
+            ->urlFor($file, 'thumb');
+
+        Assert::notNull($url);
+    }
+
+    /**
+     * Review 1.0 pass 2, N8: a failure that says nothing about the file — a
+     * stalled stream, a full disk, ImageMagick out of resources under load —
+     * is not remembered; the next request tries again.
+     */
+    public function aTransientFailureIsNotRemembered(): void
+    {
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $this->processor = Doubles::failingProcessor(ProcessingFailedException::transient('stream stalled'));
+        $derivatives = $this->derivatives(failures: new MemorySimpleCache());
+
+        foreach ([1, 2] as $attempt) {
+            try {
+                $derivatives->ensure($file, 'thumb');
+                Assert::fail("attempt {$attempt} must fail");
+            } catch (ProcessingFailedException $e) {
+                Assert::true($e->isTransient(), "attempt {$attempt}");
+            }
+        }
+
+        verify(fn() => $this->processor->process(Arg::any(), Arg::any(), Arg::any()), times: 2);
+    }
+
+    /**
      * Each verdict comes back as its own class: `warm` counts an unsupported
      * source as a skip, and that must not turn into a failure on replay.
      */
@@ -622,6 +689,12 @@ final class DerivativesTest
         Assert::instanceOf($sets[0]->getTtl(), DateInterval::class);
         Assert::same($sets[0]->getTtl()->i, 2);
         Assert::string((string) $sets[0]->getKey())->notContains(':');
+        // PSR-16 guarantees keys of up to 64 characters from A-Z a-z 0-9 _ .
+        // (review 1.0 pass 2, N15).
+        Assert::true(
+            preg_match('/^[A-Za-z0-9_.]{1,64}$/D', (string) $sets[0]->getKey()) === 1,
+            'not a portable PSR-16 key: ' . $sets[0]->getKey(),
+        );
     }
 
     /**
@@ -660,6 +733,30 @@ final class DerivativesTest
     }
 
     /**
+     * Review 1.0 pass 2, N10: a URL minted outside the tenant's request (a
+     * job, a mail) needs a generator pinned to that tenant — `-web`'s
+     * `HmacProxyUrlGenerator::forScope()`. `withProxyUrls()` hands it to
+     * `urlFor()` (and so to `Srcset`) without touching the shared facade.
+     */
+    public function withProxyUrlsMintsThroughTheGivenGenerator(): void
+    {
+        $shared = new SignedProxyUrlGenerator();
+        $pinned = new SignedProxyUrlGenerator();
+        $file = Fixtures::file();
+        $this->store->setObject($file->relativePath, 'original bytes');
+        $derivatives = $this->derivatives(proxyUrls: $shared);
+
+        $url = $derivatives->withProxyUrls($pinned)->urlFor($file, 'thumb');
+
+        Assert::notNull($url);
+        Assert::same($pinned->lastVariant, 'thumb');
+        Assert::null($shared->lastVariant);
+
+        $derivatives->urlFor($file, 'thumb');
+        Assert::same($shared->lastVariant, 'thumb');
+    }
+
+    /**
      * What can never be generated still throws instead of minting a URL
      * that 404s: the cheap refusals run on the proxy path too.
      */
@@ -692,6 +789,15 @@ final class DerivativesTest
         Expect::exception(ProcessingFailedException::class);
 
         $this->derivatives(proxyUrls: new SignedProxyUrlGenerator(), failures: $cache)->urlFor($file, 'thumb');
+    }
+
+    private function brokenCache(): CacheInterface
+    {
+        $cache = Understudy::for(CacheInterface::class);
+        when(fn() => $cache->get(Arg::any(), Arg::any()))->throws(new \RuntimeException('cache is down'));
+        when(fn() => $cache->set(Arg::any(), Arg::any(), Arg::any()))->throws(new \RuntimeException('cache is down'));
+
+        return $cache;
     }
 
     private function derivatives(

@@ -104,7 +104,6 @@ final class WarmCommand extends Command
 
                 foreach ($page as $file) {
                     $seen++;
-                    $last = $file->id;
                     $after = $file->id;
 
                     foreach ($presetNames as $presetName) {
@@ -128,10 +127,16 @@ final class WarmCommand extends Command
                             ));
                         }
                     }
+
+                    // Only now: a run that dies between this file's presets
+                    // must resume *at* it, not after it (review 1.0 pass 2,
+                    // N16).
+                    $last = $file->id;
                 }
             }
         } finally {
-            // Printed even when the run dies: it is what `--after` resumes from.
+            // Printed even when the run dies: it is what `--after` resumes
+            // from — the last file whose presets were all attempted.
             if ($last !== null) {
                 $io->text(sprintf('Last id: %s', $last));
             }

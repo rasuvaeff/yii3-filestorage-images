@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Rasuvaeff\Yii3FilestorageImages\Tests\Command;
 
+use Nyholm\Psr7\Factory\Psr17Factory;
 use Rasuvaeff\Understudy\Arg;
+use Rasuvaeff\Understudy\Understudy;
 use Rasuvaeff\Yii3Filestorage\File;
 use Rasuvaeff\Yii3Filestorage\Policy\DeliveryPolicyRegistry;
 use Rasuvaeff\Yii3Filestorage\Store\StoreRegistry;
@@ -14,6 +16,7 @@ use Rasuvaeff\Yii3FilestorageImages\Format;
 use Rasuvaeff\Yii3FilestorageImages\Preset;
 use Rasuvaeff\Yii3FilestorageImages\PresetRegistry;
 use Rasuvaeff\Yii3FilestorageImages\Processing\ImageProcessorInterface;
+use Rasuvaeff\Yii3FilestorageImages\Processing\ProcessedImage;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\DerivativeAwareMemoryStore;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Doubles;
 use Rasuvaeff\Yii3FilestorageImages\Tests\Support\Fixtures;
@@ -25,6 +28,7 @@ use Testo\Test;
 use Yiisoft\Test\Support\Clock\StaticClock;
 
 use function Rasuvaeff\Understudy\verify;
+use function Rasuvaeff\Understudy\when;
 
 #[Test]
 #[Covers(WarmCommand::class)]
@@ -234,10 +238,10 @@ final class WarmCommandTest
     }
 
     /**
-     * An error nothing should catch still ends the run — and still leaves the
-     * id to resume after.
+     * An error nothing should catch still ends the run; with no file
+     * finished there is no id to resume after.
      */
-    public function aFatalErrorStillLeavesTheLastId(): void
+    public function aFatalErrorOnTheFirstFileLeavesNoLastId(): void
     {
         $tester = $this->tester(
             $this->storeWith('file-1'),
@@ -253,7 +257,43 @@ final class WarmCommandTest
             Assert::same($e->getMessage(), 'engine bug');
         }
 
+        // Nothing finished: a resume starts from the beginning, file-1 included.
+        Assert::string($this->display($tester))->notContains('Last id');
+    }
+
+    /**
+     * Review 1.0 pass 2, N16: `Last id` is the last file whose presets were
+     * all attempted. A run that dies on file-2's second preset must not name
+     * file-2 — `--after file-2` would skip that preset for good.
+     */
+    public function aFatalErrorMidFileLeavesThePreviousFilesId(): void
+    {
+        $calls = 0;
+        $processor = Understudy::for(ImageProcessorInterface::class);
+        when(fn() => $processor->supports(Arg::any(), Arg::any()))->returns(true);
+        when(fn() => $processor->process(Arg::any(), Arg::any(), Arg::any()))
+            ->answers(static function () use (&$calls): ProcessedImage {
+                if (++$calls === 4) {
+                    throw new \Error('engine bug');
+                }
+
+                return new ProcessedImage(stream: (new Psr17Factory())->createStream('x'), width: 1, height: 1);
+            });
+        $tester = $this->tester(
+            $this->storeWith('file-1', 'file-2'),
+            files: [Fixtures::file(id: 'file-1'), Fixtures::file(id: 'file-2')],
+            processor: $processor,
+        );
+
+        try {
+            $tester->execute([]);
+            Assert::fail('the error must propagate');
+        } catch (\Error $e) {
+            Assert::same($e->getMessage(), 'engine bug');
+        }
+
         Assert::string($this->display($tester))->contains('Last id: file-1');
+        Assert::string($this->display($tester))->notContains('Last id: file-2');
     }
 
     /**
