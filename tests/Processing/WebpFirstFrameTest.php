@@ -79,6 +79,11 @@ final class WebpFirstFrameTest
         yield 'extended still' => [Webp::riff(Webp::chunk('VP8X', "\x10\0\0\0\1\0\0\1\0\0") . Webp::chunk('VP8L', 'x'))];
         yield 'not riff' => [str_repeat("\x89PNG", 10)];
         yield 'riff, not webp' => ['RIFF' . pack('V', 30) . 'WAVEfmt ' . str_repeat("\0", 30)];
+        // The byte where a VP8X header keeps its animation flag, set: a
+        // RIFF of another kind is still not a WebP.
+        yield 'riff, not webp, flag byte set' => ['RIFF' . pack('V', 38) . 'WAVEfmt ' . "\x10\0\0\0\x02" . str_repeat("\0", 25)];
+        // Every byte of an animated VP8X header but the RIFF signature.
+        yield 'animated header without the riff signature' => ['RIFX' . substr(Webp::animation(10, 10, []), 4)];
         yield 'too short' => ['RIFF'];
     }
 
@@ -102,6 +107,19 @@ final class WebpFirstFrameTest
             Webp::riff(substr(Webp::animation(10, 10, []), 12) . Webp::chunk('ANMF', str_repeat("\0", 15))),
             'truncated',
         ];
+        yield 'an empty frame chunk ending the file' => [
+            Webp::riff(substr(Webp::animation(10, 10, []), 12) . 'ANMF' . pack('V', 0)),
+            'truncated',
+        ];
+        yield 'a frame header with no frame data' => [
+            Webp::riff(substr(Webp::animation(10, 10, []), 12) . Webp::chunk('ANMF', str_repeat("\0", 16))),
+            'carries no image',
+        ];
+        yield 'a bare animated header' => [Webp::riff(Webp::chunk('VP8X', "\x02\0\0\0\x09\0\0\x09\0\0")), 'has no frame'];
+        yield 'trailing bytes too short for a chunk header' => [
+            Webp::riff(substr(Webp::animation(10, 10, []), 12)) . str_repeat("\0", 7),
+            'has no frame',
+        ];
         yield 'chunk past the end' => [
             Webp::riff(substr(Webp::animation(10, 10, []), 12) . 'ANMF' . pack('V', 1000) . 'short'),
             'runs past the end',
@@ -114,5 +132,27 @@ final class WebpFirstFrameTest
         $image = Webp::chunk('VP8L', 'img');
 
         Assert::same(WebpFirstFrame::of(Webp::animation(10, 10, [[$image, 2, 2, 8, 8]]))?->still, Webp::riff($image));
+    }
+
+    /**
+     * Sizes are 24-bit little-endian: canvas and frame sides past 65536
+     * read every byte, and the still's extended header writes every byte
+     * of the frame's size back.
+     */
+    public function sidesUseAllThreeBytes(): void
+    {
+        $alpha = Webp::chunk('ALPH', 'alpha');
+        $image = Webp::chunk('VP8 ', 'lossy!');
+        // 0x012346 = 74566, minus one on the wire: 45 23 01.
+        $bytes = Webp::animation(0x012346 + 4, 0x012346 + 2, [[$alpha . $image, 2, 0, 0x012346, 0x012346]]);
+
+        $frame = WebpFirstFrame::of($bytes);
+
+        Assert::notNull($frame);
+        Assert::same([$frame->canvasWidth, $frame->canvasHeight, $frame->x, $frame->y], [74570, 74568, 2, 0]);
+        Assert::same(
+            $frame->still,
+            Webp::riff(Webp::chunk('VP8X', "\x10\0\0\0" . "\x45\x23\x01" . "\x45\x23\x01") . $alpha . $image),
+        );
     }
 }

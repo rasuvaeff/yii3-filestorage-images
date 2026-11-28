@@ -325,6 +325,73 @@ final class GdImageProcessorTest
         Assert::same([$processed->width, $processed->height], [10, 10]);
     }
 
+    /**
+     * @return iterable<string, array{int, int}>
+     */
+    public static function singlePixelSideProvider(): iterable
+    {
+        yield 'one pixel wide' => [1, 5];
+        yield 'one pixel tall' => [5, 1];
+    }
+
+    /**
+     * A decoded side of one pixel is the source's size, not rounded up to
+     * anything: contain without upscale keeps it.
+     */
+    #[DataProvider('singlePixelSideProvider')]
+    public function aSinglePixelSideIsTheSourceSize(int $width, int $height): void
+    {
+        $this->requireExtension();
+
+        $processed = (new GdImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource($width, $height),
+            'image/png',
+            new Preset(name: 'thumb', format: Format::Png, width: 100, height: 100),
+        );
+
+        Assert::same([$processed->width, $processed->height], [$width, $height]);
+    }
+
+    /**
+     * @return iterable<string, array{int<0, 100>, int}>
+     */
+    public static function pngEffortProvider(): iterable
+    {
+        // quality * 9 / 100, rounded down, is the zlib level; the stream
+        // header's FLEVEL names its band: 2 for level 6, 3 for 7 and up,
+        // 1 for 2..5. The qualities sit at the band edges.
+        yield 'quality 66 is level 5' => [66, 1];
+        yield 'quality 67 is level 6' => [67, 2];
+        yield 'quality 70 is level 6' => [70, 2];
+        yield 'quality 77 is level 6' => [77, 2];
+        yield 'quality 78 is level 7' => [78, 3];
+    }
+
+    /**
+     * The quality-to-level mapping, read back from the zlib header of the
+     * first IDAT chunk — the encoder records the effort band it was asked
+     * for.
+     *
+     * @param int<0, 100> $quality
+     */
+    #[DataProvider('pngEffortProvider')]
+    public function pngQualityPicksTheZlibLevel(int $quality, int $band): void
+    {
+        $this->requireExtension();
+
+        $processed = (new GdImageProcessor(new Psr17Factory()))->process(
+            $this->pngSource(16, 16),
+            'image/png',
+            new Preset(name: 'png', format: Format::Png, width: 16, quality: $quality),
+        );
+
+        $png = (string) $processed->stream;
+        $idat = strpos($png, 'IDAT');
+        Assert::true($idat !== false);
+
+        Assert::same(\ord($png[$idat + 5]) >> 6, $band);
+    }
+
     private function requireExtension(): void
     {
         if (!\extension_loaded('gd')) {

@@ -224,13 +224,144 @@ final class SourceGuardTest
     {
         yield 'no frame' => [Gif::of(20, 20, [])];
         yield 'a zero-width frame' => [Gif::of(20, 20, [[0, 0, 0, 20]])];
+        yield 'a zero-height frame' => [Gif::of(20, 20, [[0, 0, 20, 0]])];
         yield 'a frame descriptor cut short' => [Gif::of(20, 20, [",\x00\x00\x00"], trailer: '')];
+        yield 'a frame descriptor one byte short' => [Gif::of(20, 20, [',' . str_repeat("\x00", 8)], trailer: '')];
     }
 
     #[DataProvider('unmeasurableGifProvider')]
     public function aGifWithoutAMeasurableFrameIsRefused(string $gif): void
     {
         Expect::exception(ProcessingFailedException::class)->withMessageContaining('could not be established');
+
+        SourceGuard::dimensions($gif, maxPixels: 0);
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function zeroSidedHeaderProvider(): iterable
+    {
+        yield 'zero width' => [Png::header(width: 0, height: 5)];
+        yield 'zero height' => [Png::header(width: 5, height: 0)];
+    }
+
+    /**
+     * `getimagesizefromstring()` reports a header's zero side as it is; a
+     * side of nothing is no dimension to size a rendition from.
+     */
+    #[DataProvider('zeroSidedHeaderProvider')]
+    public function aHeaderWithAZeroSideIsRefused(string $header): void
+    {
+        Expect::exception(ProcessingFailedException::class)->withMessageContaining('could not be established');
+
+        SourceGuard::dimensions($header, maxPixels: 0);
+    }
+
+    /**
+     * @return iterable<string, array{int, int}>
+     */
+    public static function globalTableProvider(): iterable
+    {
+        yield 'two colours' => [0x80, 6];
+        yield 'four colours' => [0x81, 12];
+    }
+
+    /**
+     * The global colour table is data, not blocks: its size comes from the
+     * screen descriptor's packed byte, and the walk starts after it. A table
+     * whose bytes all read as the trailer stops any walk that starts inside
+     * it short of the frame.
+     */
+    #[DataProvider('globalTableProvider')]
+    public function theGlobalColourTableIsSkippedWhateverItsBytesSay(int $flags, int $tableBytes): void
+    {
+        $gif = Gif::raw(100, 100, $flags, str_repeat(';', $tableBytes), Gif::frame(0, 0, 100, 100) . ';');
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [100, 100]);
+    }
+
+    /**
+     * Only the table flag (bit 7) says a global table follows; the size bits
+     * alone do not, and the aspect byte before the blocks is not a block.
+     */
+    public function withoutTheTableFlagTheBlocksFollowTheScreenDescriptor(): void
+    {
+        $gif = Gif::raw(100, 100, 0x01, '', Gif::frame(0, 0, 100, 100) . ';', aspect: 0x3B);
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [100, 100]);
+    }
+
+    /**
+     * What follows the trailer is not part of the image: the decoders stop
+     * there, and so does the walk.
+     */
+    public function nothingAfterTheTrailerIsMeasured(): void
+    {
+        $gif = Gif::of(10, 10, [[0, 0, 10, 10], ';', [0, 0, 4000, 4000]], trailer: '');
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [10, 10]);
+    }
+
+    /**
+     * An extension's sub-blocks are skipped by their sizes, every one of them
+     * up to the terminator: bytes that would read as a frame inside the
+     * second sub-block are data.
+     */
+    public function aFrameShapedExtensionPayloadIsSkipped(): void
+    {
+        $hidden = Gif::frame(0, 0, 4000, 4000);
+        $gif = Gif::raw(
+            10,
+            10,
+            0x80,
+            "\x00\x00\x00\xFF\xFF\xFF",
+            "!\xFE\x03abc" . \chr(\strlen($hidden)) . $hidden . "\x00" . Gif::frame(0, 0, 10, 10) . ';',
+        );
+
+        Assert::same(SourceGuard::dimensions($gif, maxPixels: 0), [10, 10]);
+    }
+
+    /**
+     * @return iterable<string, array{int, string}>
+     */
+    public static function localTableProvider(): iterable
+    {
+        yield 'two colours' => [0x80, str_repeat(';', 6)];
+        yield 'four colours' => [0x81, str_repeat(';', 12)];
+        yield 'size bits without the table flag' => [0x01, ''];
+    }
+
+    /**
+     * A frame's local colour table is skipped by the size its own packed
+     * byte declares, so the walk reaches the next frame — here the one that
+     * does not fit.
+     */
+    #[DataProvider('localTableProvider')]
+    public function aLocalColourTableIsSkippedToTheNextFrame(int $flags, string $table): void
+    {
+        $gif = Gif::raw(
+            100,
+            100,
+            0x80,
+            "\x00\x00\x00\xFF\xFF\xFF",
+            Gif::frame(0, 0, 100, 100, $flags, $table) . Gif::frame(0, 0, 4000, 4000) . ';',
+        );
+
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('4000x4000');
+
+        SourceGuard::dimensions($gif, maxPixels: 0);
+    }
+
+    /**
+     * A descriptor that ends exactly at the end of the file is whole: it is
+     * read and checked.
+     */
+    public function aDescriptorEndingTheFileIsStillChecked(): void
+    {
+        $gif = Gif::raw(10, 10, 0x80, "\x00\x00\x00\xFF\xFF\xFF", ',' . pack('vvvvC', 0, 0, 4000, 4000, 0));
+
+        Expect::exception(UnsupportedSourceException::class)->withMessageContaining('4000x4000');
 
         SourceGuard::dimensions($gif, maxPixels: 0);
     }

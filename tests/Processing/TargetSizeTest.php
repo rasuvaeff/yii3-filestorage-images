@@ -12,6 +12,7 @@ use Rasuvaeff\Yii3FilestorageImages\Preset;
 use Rasuvaeff\Yii3FilestorageImages\Processing\TargetSize;
 use Testo\Assert;
 use Testo\Codecov\Covers;
+use Testo\Data\DataProvider;
 use Testo\Test;
 
 #[Test]
@@ -333,5 +334,40 @@ final class TargetSizeTest
         yield '1x1 source' => [1, 1, 100, 100, false];
         yield 'extreme aspect upscaled' => [4000, 1, 100, 100, true];
         yield 'source equals box' => [100, 100, 100, 100, false];
+    }
+
+    /**
+     * @return iterable<string, array{int, int, int, int, array{int, int}}>
+     */
+    public static function roundedWindowProvider(): iterable
+    {
+        // The window's long side falls one pixel short of the box while its
+        // short side rounds up to meet it.
+        yield 'width short, height rounded up' => [99, 50, 100, 1, [99, 1]];
+        yield 'height short, width rounded up' => [50, 99, 1, 100, [1, 99]];
+    }
+
+    /**
+     * Without upscale, cover fills the box only when the window covers it
+     * on both sides: a window that reaches one side by rounding and misses
+     * the other is the output, not stretched to the box.
+     *
+     * @param array{int, int} $expected
+     */
+    #[DataProvider('roundedWindowProvider')]
+    public function coverWithoutUpscaleFillsOnlyWhenBothSidesAreCovered(
+        int $sourceWidth,
+        int $sourceHeight,
+        int $boxWidth,
+        int $boxHeight,
+        array $expected,
+    ): void {
+        $target = TargetSize::calculate(
+            sourceWidth: $sourceWidth,
+            sourceHeight: $sourceHeight,
+            preset: new Preset(name: 'strip', format: Format::Webp, width: $boxWidth, height: $boxHeight, fit: Fit::Cover),
+        );
+
+        Assert::same([$target->width, $target->height], $expected);
     }
 }
