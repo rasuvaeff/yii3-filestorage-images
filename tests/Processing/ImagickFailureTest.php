@@ -45,9 +45,9 @@ final class ImagickFailureTest
 
     /**
      * Review 1.0 pass 2, N8: only errors about the bytes — a corrupt image, a
-     * coder that cannot read them — are a verdict on the file. Resource
-     * limits, cache, delegate, file-open and every other error are
-     * transient: the next request tries again.
+     * coder that cannot read them, ghostscript refusing a broken PDF — are a
+     * verdict on the file. Resource limits, cache, file-open and every other
+     * error are transient: the next request tries again.
      */
     #[DataProvider('severityProvider')]
     public function onlyCorruptAndCoderErrorsAreAboutTheFile(int $code, bool $transient): void
@@ -68,7 +68,7 @@ final class ImagickFailureTest
         yield 'CoderError' => [450, false];
         yield 'ResourceLimitError' => [400, true];
         yield 'ResourceLimitWarning' => [300, true];
-        yield 'DelegateError' => [415, true];
+        yield 'DelegateError' => [415, false];
         yield 'CacheError' => [445, true];
         yield 'FileOpenError' => [430, true];
         yield 'fatal ResourceLimit' => [700, true];

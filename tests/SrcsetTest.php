@@ -137,6 +137,26 @@ final class SrcsetTest
         );
     }
 
+    /**
+     * Review 1.0 pass 2, N10: a srcset built in a job for a tenant's file
+     * mints through the generator `withProxyUrls()` pinned, not the shared one.
+     */
+    public function aFacadeWithAnotherGeneratorMintsThroughIt(): void
+    {
+        $shared = new SignedProxyUrlGenerator();
+        $pinned = new SignedProxyUrlGenerator();
+
+        $srcset = Srcset::for(
+            $this->derivatives($shared)->withProxyUrls($pinned),
+            $this->presets(),
+            Fixtures::file(),
+        );
+
+        Assert::notNull($srcset);
+        Assert::notNull($pinned->lastVariant);
+        Assert::null($shared->lastVariant);
+    }
+
     private function presets(): PresetRegistry
     {
         return new PresetRegistry([

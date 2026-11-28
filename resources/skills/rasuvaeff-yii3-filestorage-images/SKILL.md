@@ -61,7 +61,7 @@ capability. Namespace `Rasuvaeff\Yii3FilestorageImages\`. Full API reference:
   for `failureTtl`; without it a source that always fails is decoded again on
   every request. Never remember a missing original, a store error or a
   transient `ProcessingFailedException` (`isTransient()`: stalled stream,
-  spool, ImageMagick resource/delegate errors). A cache that throws is no
+  spool, ImageMagick resource/cache errors). A cache that throws is no
   cache — never a 500.
 
 ## Serving

@@ -109,7 +109,8 @@ does. Run `make test-images` whenever a processor changes.
   `process()`/`writeDerivative()` are remembered — never a missing original, a
   `StoreException` or `ProcessingFailedException::transient()` (stalled
   stream, spool, GD allocation/encode, ImageMagick codes other than
-  CorruptImage/Coder 325/350/425/450 — `ImagickFailure`). Checked before the
+  CorruptImage/Coder/Delegate 325/350/415/425/450 — `ImagickFailure`; 415 is
+  gs refusing a broken PDF, remembered so gs is not re-run per request). Checked before the
   lock, after losing it, and under it. Every cache call is wrapped: a throwing
   cache is a miss / no-op (pass 2 N7). Key: `fsimg.failed.` + 48 hex of sha256
   of store, rendition path, `updatedAt`, content hash — 61 chars, PSR-16

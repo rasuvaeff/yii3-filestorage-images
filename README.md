@@ -233,8 +233,9 @@ keyed by the physical rendition and the original's version (`updatedAt`,
 content hash), so a re-upload is tried at once. A missing original, a store
 error or a transient processing failure is never remembered — it may be gone
 a second later: a stalled source stream, a temporary file that could not be
-written, ImageMagick out of a resource under load, a delegate (ghostscript)
-that failed. Only ImageMagick's CorruptImage and Coder errors, GD's refusal to
+written, ImageMagick out of a resource under load. Only ImageMagick's
+CorruptImage, Coder and Delegate errors (ghostscript refusing a broken PDF —
+not remembering it would re-run ghostscript on every request), GD's refusal to
 decode, the byte/pixel guards and an output over `maxBytes` are verdicts on
 the file (`ProcessingFailedException::isTransient()` tells them apart). The
 cache is optional in the strong sense: one that throws (Redis down) is a miss

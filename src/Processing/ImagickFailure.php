@@ -23,11 +23,16 @@ final readonly class ImagickFailure
 
     /**
      * ImageMagick severities that are a verdict on the bytes: CorruptImage
-     * and Coder, as warning (3xx) and error (4xx). Everything else — resource
-     * limits, the pixel cache, a delegate that died, a file that could not be
-     * opened — can pass by itself and is transient (review 1.0 pass 2, N8).
+     * and Coder, as warning (3xx) and error (4xx), and DelegateError (415) —
+     * ghostscript refusing a malformed PDF, measured. The render is bounded
+     * by `pdf:fit-page`, so a delegate failing for want of resources is rare,
+     * and not remembering it would re-run ghostscript on every request for a
+     * broken PDF — the amplifier the failure cache exists to stop.
+     * Everything else — resource limits, the pixel cache, a file that could
+     * not be opened — can pass by itself and is transient (review 1.0 pass 2,
+     * N8).
      */
-    private const array ABOUT_THE_FILE = [325, 350, 425, 450];
+    private const array ABOUT_THE_FILE = [325, 350, 415, 425, 450];
 
     public static function from(
         ImagickException $exception,

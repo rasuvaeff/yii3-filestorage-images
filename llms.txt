@@ -60,8 +60,8 @@ ImageMetadataStorage($s)`.
   rendition path + original `updatedAt`/content hash (key ≤ 64 chars, PSR-16
   portable). Missing originals, store errors and transient processing
   failures (`ProcessingFailedException::isTransient()`: stalled stream, spool
-  failure, IM resource/cache/delegate errors — only CorruptImage/Coder errors
-  are about the file) are never remembered. A cache that throws is a miss on
+  failure, IM resource/cache/file-open errors — only CorruptImage/Coder/Delegate
+  errors are about the file) are never remembered. A cache that throws is a miss on
   read and a no-op on write. A remembered failure is rethrown with its
   kind (unsupported → `UnsupportedSourceException`, decode →
   `ProcessingFailedException`, size → `DerivativeGenerationException`).
